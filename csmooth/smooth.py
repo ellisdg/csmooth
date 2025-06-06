@@ -1,3 +1,5 @@
+import logging
+import warnings
 import nilearn.image
 import numpy as np
 import scipy
@@ -343,10 +345,10 @@ def main():
 
     if os.path.exists(args.out_file):
         if args.no_overwrite:
-            print(f"Output file {args.out_file} already exists.")
-            print("Exiting. Use --no_overwrite to overwrite existing files.")
+            warnings.warn(f"Output file {args.out_file} already exists.")
+            warnings.warn("Exiting. Use --no_overwrite to overwrite existing files.")
         else:
-            print(f"Overwriting existing file: {args.out_file}.")
+            warnings.warn(f"Overwriting existing file: {args.out_file}.")
 
     smooth_image(in_file=args.in_file,
                  out_file=args.out_file,
@@ -358,7 +360,7 @@ def main():
                  output_labelmap=output_labelmap,
                  resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size),)
 
-    print("Smoothing complete.")
+    logging.log("Smoothing complete.")
 
 
 if __name__ == "__main__":
