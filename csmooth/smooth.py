@@ -246,24 +246,76 @@ def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, la
     smoothed_signal_data[_nodes, :] = _smoothed_data
 
 
-def smooth_image(filename, surface_filenames, tau=None, fwhm=None, output_filename=None, output_directory=None,
-                 write_labelmap=True, overwrite=False, resample_resolution=None, mask_filename=None, mask_dilation=3):
+def load_and_resample_image(in_file, resample_resolution):
+    reference_image = nib.load(in_file)
+    original_shape = reference_image.shape[:3]
+    original_affine = reference_image.affine
+
+    if resample_resolution is not None:
+        affine = adjust_affine_spacing(reference_image.affine, np.asarray(resample_resolution)).numpy()
+        reference_data = resample_data_to_affine(reference_image.get_fdata()[..., 0],
+                                                 target_affine=affine,
+                                                 original_affine=reference_image.affine)
+        shape = reference_data.shape[:3]
+        reference_image = nib.Nifti1Image(reference_data, affine)
+    else:
+        affine = original_affine
+        shape = original_shape
+
+    return reference_image, affine, shape, original_shape, original_affine
+
+
+def process_mask(mask_file, reference_image, mask_dilation):
+    if mask_file is not None:
+        mask_image = nib.load(mask_file)
+    else:
+        mask_image = nib.Nifti1Image(np.ones(reference_image.shape[:3], dtype=np.uint8), reference_image.affine)
+
+    mask_image = nilearn.image.resample_to_img(mask_image, reference_image,
+                                               interpolation="nearest",
+                                               force_resample=True)
+    mask_array = mask_image.get_fdata() > 0.5
+
+    if mask_dilation is not None and mask_file is not None:
+        mask_array = scipy.ndimage.binary_dilation(mask_array, iterations=mask_dilation)
+
+    return mask_array
+
+
+def save_labelmap(output_labelmap, shape, affine, labels, sorted_labels, unique_nodes):
+    os.makedirs(os.path.dirname(output_labelmap), exist_ok=True)
+    labelmap = np.zeros(shape, dtype=np.uint32).flatten()
+
+    for i, label in enumerate(sorted_labels):
+        labelmap[unique_nodes[labels == label]] = i + 1
+
+    labelmap_image = nib.Nifti1Image(labelmap.reshape(shape), affine)
+    labelmap_image.to_filename(output_labelmap)
+
+
+def smooth_components(edge_src, edge_dst, edge_distances, signal_data, labels, sorted_labels, unique_nodes, tau, fwhm):
+    smoothed_signal_data = signal_data.copy()
+    for label in tqdm(sorted_labels, desc="Smoothing components", unit="component"):
+        smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
+                         smoothed_signal_data, tau=tau, fwhm=fwhm)
+    return smoothed_signal_data
+
+
+def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_labelmap=None, overwrite=True,
+                 resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4):
     """
     Smooth an image using graph signal smoothing.
-    :param filename: Can be a path to a Nifti file or a list of filenames.
-    :param surface_filenames: List of surface filenames to use for edge pruning.
-    :param tau: value(s) of tau to use for graph signal smoothing.
-    :param fwhm: value(s) of FWHM to use for Gaussian smoothing. If None, no smoothing is applied.
-    :param output_filename: Optional output filename to save the smoothed image. Must be None if multiple
-    input filenames or taus are provided. Either output_filename or output_directory must be provided.
-    :param output_directory: Optional output directory to save the smoothed image. Must be provided if multiple
-    input filenames or taus are provided.
-    :param write_labelmap: Whether to write the labelmap of the voxel locations and components that were smoothed.
+    :param in_file: Path to a Nifti file to be smoothed.
+    :param out_file: Output filename to save the smoothed image.
+    :param surface_files: List of surface filenames to use for edge pruning.
+    :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
+    :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
+    :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
     :param overwrite: Whether to overwrite existing output files.
     :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
     Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
     smoothing, the image is resampled back to the original resolution.
-    :param mask_filename: Optional filename of a mask to use for smoothing. This can speed up processing and reduce
+    :param mask_file: Optional filename of a mask to use for smoothing. This can speed up processing and reduce
      computational requirements, If None, no mask is used.
     :param mask_dilation: Optional number of voxels to dilate the mask by. This can help to include more voxels in the
         smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
@@ -272,32 +324,12 @@ def smooth_image(filename, surface_filenames, tau=None, fwhm=None, output_filena
     :return:
     """
 
-
-    if output_filename is None and output_directory is None:
-        raise ValueError("Must provide either output_filename or output_directory")
-
-    if not isinstance(tau, list):
-        tau = [tau]
-    else:
-        if output_directory is None:
-            raise ValueError("Must provide output_directory if multiple tau values are provided")
-        output_filename = None
-
-    if isinstance(filename, list):
-        image_filenames = filename
-        if output_directory is None:
-            raise ValueError("Must provide output_directory if multiple input filenames are provided")
-        # set output_filename to None
-        output_filename = None
-    else:
-        image_filenames = [filename]
-
-    reference_image = nib.load(image_filenames[0])
+    reference_image = nib.load(in_file)
     original_shape = reference_image.shape[:3]
     original_affine = reference_image.affine
 
-    if mask_filename is not None:
-        mask_image = nib.load(mask_filename)
+    if mask_file is not None:
+        mask_image = nib.load(mask_file)
     else:
         mask_image = nib.Nifti1Image(np.ones(original_shape, dtype=np.uint8), reference_image.affine)
 
@@ -313,104 +345,146 @@ def smooth_image(filename, surface_filenames, tau=None, fwhm=None, output_filena
         affine = original_affine
         shape = original_shape
 
-    mask_image = nilearn.image.resample_to_img(mask_image, reference_image, interpolation="nearest", force_resample=True)
+    # force the mask to be in the same space as the reference image
+    if not np.allclose(original_affine, affine, atol=1e-6):
+        import warnings
+        warnings.warn("Mask affine does not match input image affine.")
+
+
+    mask_image = nilearn.image.resample_to_img(mask_image, reference_image,
+                                               interpolation="nearest",
+                                               force_resample=True)
     mask_array = mask_image.get_fdata() > 0.5
-    if mask_dilation is not None and mask_filename is not None:
+
+    if mask_dilation is not None and mask_file is not None:
         mask_array = scipy.ndimage.binary_dilation(mask_array, iterations=mask_dilation)
 
-    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files=surface_filenames)
+    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files=surface_files)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
-    select_labels = [*sorted_labels[:5], sorted_labels[5:]]
 
-    if write_labelmap and output_directory is not None:
-        os.makedirs(output_directory, exist_ok=True)
-        labelmap_filename = os.path.join(output_directory, "components_labelmap.nii.gz")
-        print("Saving labelmap to:", labelmap_filename)
+    if output_labelmap is not None:
+        os.makedirs(os.path.dirname(output_labelmap), exist_ok=True)
+        print("Saving labelmap to:", output_labelmap)
 
         # save select labels to a file
         labelmap = np.zeros(shape, dtype=np.uint32).flatten()
+
         for i, label in enumerate(sorted_labels):
             labelmap[unique_nodes[labels == label]] = i + 1
+
         labelmap_image = nib.Nifti1Image(labelmap.reshape(shape), affine)
-        labelmap_image.to_filename(labelmap_filename)
+        labelmap_image.to_filename(output_labelmap)
 
-    # TODO: figure out a way to do all image files in one pass
 
-    for _image_filename, _tau, _fwhm in tqdm(itertools.product(image_filenames, tau, fwhm), desc="Processing files",
-                                           unit="file"):
-        tqdm.write(f"Processing filename: {_image_filename}, tau: {_tau}, fwhm: {_fwhm}")
-        if output_filename is None and _tau is not None:
-            _output_filename = os.path.join(output_directory,
-                                            f"smoothed_image_tau-{_tau:.2f}",
-                                            os.path.basename(_image_filename))
-        elif output_filename is None and _fwhm is not None:
-            _output_filename = os.path.join(output_directory,
-                                            f"smoothed_image_fwhm-{_fwhm:.2f}",
-                                            os.path.basename(_image_filename))
+    tqdm.write(f"Processing filename: {in_file}, tau: {tau}, fwhm: {fwhm}")
+
+    signal_image = nib.load(in_file)
+    signal_data = signal_image.get_fdata()
+    if signal_data.ndim == 3:
+        signal_data = signal_data[..., None]
+
+    if resample_resolution is not None:
+        signal_data = resample_data_to_shape(signal_data, shape)
+
+    signal_shape = signal_data.shape
+
+    x, y, z, t = signal_shape
+
+    signal_data = signal_data.reshape(x * y * z, t)
+    smoothed_signal_data = signal_data.copy()
+
+    for label in tqdm(sorted_labels, desc="Smoothing components", unit="component"):
+        smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
+                         smoothed_signal_data, tau=tau, fwhm=fwhm)
+    smoothed_signal_data = smoothed_signal_data.reshape(x, y, z, t)
+
+    if resample_resolution is not None:
+        smoothed_signal_data = resample_data_to_shape(smoothed_signal_data, original_shape)
+    smoothed_image = nib.Nifti1Image(smoothed_signal_data, signal_image.affine)
+
+    print(f"Saving smoothed image to: {out_file}")
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    smoothed_image.to_filename(out_file)
+
+
+def parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Smooth fMRI images using constrained smoothing.")
+    parser.add_argument("in_file", type=str,
+                        help="Input image to be smoothed. In most cases this should be a preprocessed fMRI image.")
+    parser.add_argument("out_file", type=str,
+                        help="Output smoothed image filename.")
+    parser.add_argument("--surface_files", type=str, nargs='+', required=True,
+                        help="List of surface files to use for edge pruning. Must be in GIFTI format.")
+    parser.add_argument("--tau", type=float,
+                        help="Tau value for heat kernel smoothing. Either --tau or --fwhm must be provided.")
+    parser.add_argument("--fwhm", type=float,
+                        help="FWHM value for Gaussian smoothing. Either --tau or --fwhm must be provided.")
+    parser.add_argument("--mask_file", type=str, default=None,
+                        help="Optional mask file to use for smoothing. "
+                             "Must be in the same space and resolution as the input image. "
+                             "If not provided, the whole image is used which increases computational requirements "
+                             "and runtime.")
+    parser.add_argument("--mask_dilation", type=int, default=3,
+                        help="Number of voxels to dilate the mask by. "
+                             "This can help make sure no parts of the brain are being eroniously excluded due to any "
+                             "masking errors. "
+                             "If None, no dilation is done. Default is 3.")
+    #TODO: add option to use labelmap instead of mask_file
+    parser.add_argument("--output_labelmap", type=str,
+                        help="Optional output labelmap filename to save the individual components that were smoothed. "
+                             "By default, this is saved to the '{output_basename}_components.nii.gz'. "
+                             "To disable, set to None. ")
+    parser.add_argument("--voxel_size", type=float, default=2.0,
+                        help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
+                             "Smaller voxel sizes allow for a more continuous graph but increase computational "
+                             "requirements and runtime. Default is 2.0 mm.")
+    parser.add_argument("--multiproc", type=int, default=4,
+                        help="Number of parallel processes to use for smoothing.")
+    parser.add_argument("--no_overwrite", action='store_true',
+                        help="If set, do not overwrite existing output files. Default is to overwrite.")
+    args = parser.parse_args()
+
+    # Validation to ensure either tau or fwhm is provided
+    if args.tau is None and args.fwhm is None:
+        parser.error("Either --tau or --fwhm must be provided.")
+    if args.tau is not None and args.fwhm is not None:
+        parser.error("Only one of --tau or --fwhm can be provided, not both.")
+
+    return args
+
+
+def main():
+    args = parse_args()
+
+    output_labelmap = args.output_labelmap
+    if output_labelmap.lower() == "none":
+        output_labelmap = None
+    elif output_labelmap is None:
+        output_labelmap = os.path.splitext(args.out_file)[0] + "_components.nii.gz"
+
+    if os.path.exists(args.out_file):
+        print(f"Output file {args.out_file} already exists.")
+        if args.no_overwrite:
+            print("Exiting. Use --no_overwrite to overwrite existing files.")
         else:
-            _output_filename = output_filename
-        if os.path.exists(_output_filename) and not overwrite:
-            continue
-        os.makedirs(os.path.dirname(_output_filename), exist_ok=True)
-        signal_image = nib.load(_image_filename)
-        signal_data = signal_image.get_fdata()
-        if signal_data.ndim == 3:
-            signal_data = signal_data[..., None]
+            print("Overwriting existing file.")
 
-        if resample_resolution is not None:
-            signal_data = resample_data_to_shape(signal_data, shape)
+    smooth_image(in_file=args.in_file,
+                 out_file=args.out_file,
+                 surface_files=args.surface_files,
+                 tau=args.tau,
+                 fwhm=args.fwhm,
+                 mask_file=args.mask_file,
+                 mask_dilation=args.mask_dilation,
+                 output_labelmap=output_labelmap,
+                 overwrite=~args.no_overwrite,
+                 resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size),)
 
-        signal_shape = signal_data.shape
-
-        x, y, z, t = signal_shape
-
-        signal_data = signal_data.reshape(x * y * z, t)
-        smoothed_signal_data = signal_data.copy()
-
-        # TODO: smooth all components, I don't think it will had much time
-
-        for label in tqdm(select_labels, desc="Smoothing components", unit="component"):
-            smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
-                             smoothed_signal_data, tau=_tau, fwhm=_fwhm)
-        smoothed_signal_data = smoothed_signal_data.reshape(x, y, z, t)
-        if resample_resolution is not None:
-            smoothed_signal_data = resample_data_to_shape(smoothed_signal_data, original_shape)
-        smoothed_image = nib.Nifti1Image(smoothed_signal_data, signal_image.affine)
-        print(f"Saving smoothed image to: {_output_filename}")
-        smoothed_image.to_filename(_output_filename)
-
-
-def demo(multiproc=6):
-    from multiprocessing import Pool
-    subject_folders = sorted(glob.glob("/media/conda2/public/sensory/derivatives/fmriprep/sub-*"))
-    if multiproc > 1:
-        with Pool(multiproc) as pool:
-            pool.map(smooth_image_wrapper, subject_folders)
-    else:
-        for subject_folder in subject_folders:
-            smooth_image_wrapper(subject_folder)
+    print("Smoothing complete.")
 
 
 if __name__ == "__main__":
-    import os
-    import glob
-    def smooth_image_wrapper(subject_folder):
-        if not os.path.isdir(subject_folder):
-            return
-        print("Processing subject folder:", subject_folder)
-        subject = os.path.basename(subject_folder)
-        image_filenames = glob.glob(os.path.join(subject_folder, f"func/{subject}*_space-T1w_desc-preproc_bold.nii.gz"))
-        surface_filenames = [os.path.join(subject_folder, "anat", f"{subject}_hemi-L_pial.surf.gii"),
-                             os.path.join(subject_folder, "anat", f"{subject}_hemi-R_pial.surf.gii"),
-                             os.path.join(subject_folder, "anat", f"{subject}_hemi-L_white.surf.gii"),
-                             os.path.join(subject_folder, "anat", f"{subject}_hemi-R_white.surf.gii")]
-        output_directory = f"/media/conda2/public/sensory/derivatives/constrained_smoothing/{subject}"
-        mask_filename = os.path.join(subject_folder, "anat", f"{subject}_desc-brain_mask.nii.gz")
-        smooth_image(image_filenames, surface_filenames,
-                     tau=None,
-                     fwhm=[3, 6, 9, 12],
-                     output_directory=output_directory, resample_resolution=(1, 1, 1),
-                     mask_filename=mask_filename,
-                     write_labelmap=True)
-    demo(multiproc=False)
+    main()
