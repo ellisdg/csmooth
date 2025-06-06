@@ -1,5 +1,8 @@
 import nibabel as nib
 import numpy as np
+from scipy.sparse.csgraph import connected_components
+
+from csmooth.matrix import create_adjacency_matrix
 
 
 def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
@@ -161,3 +164,42 @@ def create_graph(mask_array, affine, surface_files):
 
     return edge_src, edge_dst, edge_distances
 
+
+def identify_connected_components(edge_src, edge_dst, edge_distances):
+    """
+    Identify connected components in a graph defined by edges and distances.
+    :param edge_src:
+    :param edge_dst:
+    :param edge_distances:
+    :return: labels: numpy array of labels for each node in the graph,
+             sorted_labels: numpy array of sorted labels by size of components.
+    """
+
+    adjacency_matrix, unique_nodes = create_adjacency_matrix(edge_src, edge_dst, weights=edge_distances)
+    n_components, labels = connected_components(csgraph=adjacency_matrix.tocsr(), directed=False, return_labels=True)
+    sorted_labels = np.argsort([(labels == l).sum() for l in np.unique(labels)])[::-1]
+
+    return labels, sorted_labels, unique_nodes
+
+
+def select_nodes(edge_src, edge_dst, edge_distances, labels, label, unique_nodes):
+    """
+    Select nodes in the graph that belong to a specific component.
+    :param edge_src: numpy array of source nodes
+    :param edge_dst: numpy array of destination nodes
+    :param edge_distances: numpy array of distances between nodes
+    :param labels: numpy array of labels for each node
+    :param label: label of the component to select
+    :param unique_nodes: numpy array of unique nodes in the graph
+    :return:
+    """
+    _nodes = unique_nodes[np.isin(labels, label)]
+    _edge_mask = np.isin(edge_src, _nodes) & np.isin(edge_dst, _nodes)
+    _edge_src = edge_src[_edge_mask]
+    _edge_dst = edge_dst[_edge_mask]
+    # renumber the nodes to match the signal data
+    _nodes_map = {node: i for i, node in enumerate(_nodes)}
+    _edge_src = np.vectorize(_nodes_map.get)(_edge_src)
+    _edge_dst = np.vectorize(_nodes_map.get)(_edge_dst)
+    _edge_distances = edge_distances[_edge_mask]
+    return _edge_src, _edge_dst, _edge_distances, _nodes
