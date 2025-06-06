@@ -2,7 +2,8 @@ import glob
 import os
 import logging
 
-from csmooth.smooth import add_parameter_args, check_parameters
+from csmooth.smooth import add_parameter_args, check_parameters, smooth_images
+
 
 def find_surface_files(fmriprep_subject_dir):
     """
@@ -147,6 +148,21 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     # TODO: add subject id to the output labelmap filename
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
     output_filenames = derive_output_filenames(output_subject_dir, parameters, files["bold_files"])
+    kernel_basename = os.path.join(output_subject_dir, "cache", "csmooth_kernel")
+    resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
+
+    smooth_images(in_files=files["bold_files"],
+                  surface_files=files["surface_files"],
+                  mask_file=files["mask_file"],
+                  out_kernel_basename=kernel_basename,
+                  surface_affine=files["surface_affine"],
+                  out_files=output_filenames,
+                  output_labelmap=output_labelmap_file,
+                  tau=parameters.get("tau", None),
+                  fwhm=parameters.get("fwhm", None),
+                  multiproc=parameters.get("multiproc", None),
+                  mask_dilation=parameters.get("mask_dilation", None),
+                  resample_resolution=resample_resolution)
 
     logging.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 
@@ -166,5 +182,13 @@ def parse_args():
     return args
 
 
+def main():
+    args = parse_args()
+
+
+
+
+if __name__ == "__main__":
+    main()
 
 

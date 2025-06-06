@@ -174,7 +174,9 @@ def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_l
     smoothed_image.to_filename(out_file)
 
 
-def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=None, fwhm=None, output_labelmap=None,
+def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=None, fwhm=None,
+                  surface_affine=None,
+                  output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4):
     """
     Smooth an image using graph signal smoothing.
@@ -185,6 +187,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
     :param surface_files: List of surface filenames to use for edge pruning.
     :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
     :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
+    :param surface_affine: Optional affine matrix to apply to the surface coordinates to align them to the image space.
     :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
     :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
     Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
@@ -195,6 +198,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
         smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
         signal image resampling is done, the mask is dilated in the signal image space (not the mask image space).
         If no mask filename is provided, this parameter is ignored.
+    :param multiproc: Number of processes to run in parallel.
     :return:
     """
 
@@ -205,7 +209,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
     reference_image, affine, shape, original_shape, original_affine = load_and_resample_image(in_files[0],
                                                                                               resample_resolution)
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
-    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files)
+    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files,
+                                                      surface_affine=surface_affine)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
 
@@ -360,7 +365,7 @@ def main():
                  output_labelmap=output_labelmap,
                  resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size),)
 
-    logging.log("Smoothing complete.")
+    logging.info("Smoothing complete.")
 
 
 if __name__ == "__main__":

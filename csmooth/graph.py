@@ -140,7 +140,8 @@ def compute_edge_distances(edge_src_xyz, edge_dst_xyz):
     return edge_distances
 
 
-def create_graph(mask_array, affine, surface_files):
+def create_graph(mask_array, affine, surface_files, surface_affine=None):
+    # TODO: implement surface_affine handling to transform surface points into mask space
     D, H, W = mask_array.shape
     image_tensor = mask_array
     edge_src, edge_dst = mask2graph(image_tensor)

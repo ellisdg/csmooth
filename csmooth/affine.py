@@ -61,3 +61,13 @@ def resample_data_to_affine(data, target_affine, original_affine):
     original_image = nib.Nifti1Image(data, original_affine)
     resampled_image = nilearn.image.resample_img(original_image, target_affine=target_affine, force_resample=True)
     return resampled_image.get_fdata()
+
+
+def load_itk_affine(filename):
+    """
+    Loads an ITK transform file and returns the affine matrix.
+    :param filename: filepath to the ITK transform file
+    :return: 4x4 numpy affine matrix
+    """
+    raise NotImplementedError("ITK affine loading is not implemented in this module. ")
+
