@@ -184,6 +184,24 @@ def parse_args():
 
 def main():
     args = parse_args()
+    kwargs = vars(args)
+    fmriprep_dir = kwargs.pop("fmriprep_dir")
+    output_dir = kwargs.pop("output_dir")
+    subject_id = kwargs.pop("subject")
+    if subject_id is None:
+        subject_dirs = glob.glob(os.path.join(fmriprep_dir, "sub-*"))
+        for fmriprep_subject_dir in subject_dirs:
+            logging.info(f"Processing subject directory: {fmriprep_subject_dir}")
+            output_subject_dir = os.path.join(output_dir, os.path.basename(fmriprep_subject_dir))
+            os.makedirs(output_subject_dir, exist_ok=True)
+            process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, kwargs)
+    else:
+        fmriprep_subject_dir = os.path.join(fmriprep_dir, f"sub-{subject_id}")
+        if not os.path.exists(fmriprep_subject_dir):
+            raise FileNotFoundError(f"Subject directory does not exist: {fmriprep_subject_dir}")
+        output_subject_dir = os.path.join(output_dir, f"sub-{subject_id}")
+        os.makedirs(output_subject_dir, exist_ok=True)
+        process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, kwargs)
 
 
 

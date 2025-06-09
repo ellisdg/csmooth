@@ -2,7 +2,7 @@ import numpy as np
 
 
 from csmooth.fwhm import estimate_fwhm
-from csmooth.smoothing import heat_kernel_smoothing
+from csmooth.heat import heat_kernel_smoothing
 
 
 def graph_smoothing_with_gradient_descent(fwhm, max_iterations=100, stop_threshold=0.01, tau=None, learning_rate=1.0,

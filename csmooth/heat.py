@@ -1,7 +1,6 @@
 from csmooth.matrix import create_adjacency_matrix
 
-from pygsp import graphs
-from pygsp import filters
+from pygsp2 import graphs, filters
 
 
 def heat_kernel_smoothing(edge_src, edge_dst, edge_distances, signal_data, tau):

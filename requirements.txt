@@ -4,3 +4,5 @@ scipy
 nilearn
 tqdm
 networkx
+nx-parallel
+pygsp2
