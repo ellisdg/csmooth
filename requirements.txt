@@ -6,3 +6,5 @@ tqdm
 networkx
 nx-parallel
 pygsp2
+trimesh
+embreex

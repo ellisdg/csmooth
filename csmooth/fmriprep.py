@@ -191,7 +191,7 @@ def main():
     output_dir = kwargs.pop("output_dir")
     subject_id = kwargs.pop("subject")
     if subject_id is None:
-        subject_dirs = glob.glob(os.path.join(fmriprep_dir, "sub-*"))
+        subject_dirs = sorted(glob.glob(os.path.join(fmriprep_dir, "sub-*")))
         for fmriprep_subject_dir in subject_dirs:
             if not os.path.isdir(fmriprep_subject_dir):
                 continue

@@ -220,6 +220,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
 
     # for each component, compute the gaussian kernels and save to file
     kernel_filenames = []
+    os.makedirs(os.path.dirname(out_kernel_basename), exist_ok=True)
     for label in tqdm(sorted_labels, desc="Computing smoothing kernels", unit="component"):
         out_kernel_filename = out_kernel_basename + f"_{label}.npz"
         _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
@@ -249,6 +250,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
             signal_data = signal_data[..., None]
 
         if resample_resolution is not None:
+            logging.debug("Resampling signal data from shape %s to %s",
+                          signal_data.shape, shape)
             signal_data = resample_data_to_shape(signal_data, shape)
 
         signal_data = signal_data.reshape(-1, signal_data.shape[-1])
@@ -328,6 +331,8 @@ def add_parameter_args(parser):
                         help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
                              "requirements and runtime. Default is 2.0 mm.")
+    parser.add_argument("--debug", action='store_true',
+                        help="If set, enable debug logging. Default is to use warning logging.")
     return parser
 
 
@@ -337,6 +342,8 @@ def check_parameters(args, parser):
         parser.error("Either --tau or --fwhm must be provided.")
     if args.tau is not None and args.fwhm is not None:
         parser.error("Only one of --tau or --fwhm can be provided, not both.")
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
 
 
 
