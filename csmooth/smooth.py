@@ -72,7 +72,7 @@ def load_and_resample_image(in_file, resample_resolution):
     original_affine = reference_image.affine
 
     if resample_resolution is not None:
-        affine = adjust_affine_spacing(reference_image.affine, np.asarray(resample_resolution)).numpy()
+        affine = adjust_affine_spacing(reference_image.affine, np.asarray(resample_resolution))
         reference_data = resample_data_to_affine(reference_image.get_fdata()[..., 0],
                                                  target_affine=affine,
                                                  original_affine=reference_image.affine)
@@ -93,7 +93,8 @@ def process_mask(mask_file, reference_image, mask_dilation):
 
     mask_image = nilearn.image.resample_to_img(mask_image, reference_image,
                                                interpolation="nearest",
-                                               force_resample=True)
+                                               force_resample=True,
+                                               copy_header=True)
     mask_array = mask_image.get_fdata() > 0.5
 
     if mask_dilation is not None and mask_file is not None:

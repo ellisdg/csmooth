@@ -50,7 +50,7 @@ def find_mask_file(fmriprep_subject_dir):
     """
 
     mask_file = os.path.join(fmriprep_subject_dir, "**", "anat", "*_desc-brain_mask.nii.gz")
-    mask_files = glob.glob(mask_file, recursive=True)
+    mask_files = [f for f in glob.glob(mask_file, recursive=True) if "space-MNI" not in f]
 
     if not mask_files:
         raise FileNotFoundError(f"No brain mask file found in {fmriprep_subject_dir}/func")
@@ -147,7 +147,9 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
 
     # TODO: add subject id to the output labelmap filename
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
-    output_filenames = derive_output_filenames(output_subject_dir, parameters, files["bold_files"])
+    output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
+                                               tau=parameters.get("tau", None),
+                                               fwhm=parameters.get("fwhm", None))
     kernel_basename = os.path.join(output_subject_dir, "cache", "csmooth_kernel")
     resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
 
@@ -191,6 +193,8 @@ def main():
     if subject_id is None:
         subject_dirs = glob.glob(os.path.join(fmriprep_dir, "sub-*"))
         for fmriprep_subject_dir in subject_dirs:
+            if not os.path.isdir(fmriprep_subject_dir):
+                continue
             logging.info(f"Processing subject directory: {fmriprep_subject_dir}")
             output_subject_dir = os.path.join(output_dir, os.path.basename(fmriprep_subject_dir))
             os.makedirs(output_subject_dir, exist_ok=True)

@@ -59,7 +59,10 @@ def resample_data_to_affine(data, target_affine, original_affine):
     import nibabel as nib
 
     original_image = nib.Nifti1Image(data, original_affine)
-    resampled_image = nilearn.image.resample_img(original_image, target_affine=target_affine, force_resample=True)
+    resampled_image = nilearn.image.resample_img(original_image,
+                                                 target_affine=target_affine,
+                                                 force_resample=True,
+                                                 copy_header=True)
     return resampled_image.get_fdata()
 
 
