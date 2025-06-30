@@ -60,14 +60,14 @@ def compute_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, n_jobs=4)
     # don't worry about nodes that are more than 3 times sigma away from the source node
     cutoff = (fwhm / np.sqrt(8 * np.log(2))) * 3
 
-    logging.info("Computing Gaussian kernels...")
+    logging.info("Computing Gaussian weights...")
     start = time.time()
     edge_src, edge_dst, edge_weights = networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm,
                                                                  cutoff=cutoff,
                                                                  n_jobs=n_jobs)
     end = time.time()
     run_time = (end - start) / 60
-    logging.info(f"Time taken for to compute Gaussian kernels: {run_time:.2f} minutes")
+    logging.info(f"Time taken to compute Gaussian weights: {run_time:.2f} minutes")
     return edge_src, edge_dst, edge_weights
 
 

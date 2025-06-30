@@ -223,36 +223,45 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
     os.makedirs(os.path.dirname(out_kernel_basename), exist_ok=True)
     for label in tqdm(sorted_labels, desc="Computing smoothing kernels", unit="component"):
         out_kernel_filename = out_kernel_basename + f"_{label}.npz"
-        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
-                                                                     edge_dst=edge_dst,
-                                                                     edge_distances=edge_distances,
-                                                                     labels=labels,
-                                                                     label=label,
-                                                                     unique_nodes=unique_nodes)
-        _edge_src, _edge_dst, _edge_weights = compute_gaussian_kernels(edge_src=_edge_src,
-                                                                       edge_dst=_edge_dst,
-                                                                       edge_distances=_edge_distances,
-                                                                       fwhm=fwhm,
-                                                                       n_jobs=multiproc)
-        np.savez_compressed(out_kernel_filename,
-                            src=_edge_src,
-                            dst=_edge_dst,
-                            weights=_edge_weights,
-                            nodes=_nodes)
+        if not os.path.exists(out_kernel_filename):
+            _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
+                                                                         edge_dst=edge_dst,
+                                                                         edge_distances=edge_distances,
+                                                                         labels=labels,
+                                                                         label=label,
+                                                                         unique_nodes=unique_nodes)
+            _edge_src, _edge_dst, _edge_weights = compute_gaussian_kernels(edge_src=_edge_src,
+                                                                           edge_dst=_edge_dst,
+                                                                           edge_distances=_edge_distances,
+                                                                           fwhm=fwhm,
+                                                                           n_jobs=multiproc)
+            np.savez_compressed(out_kernel_filename,
+                                src=_edge_src,
+                                dst=_edge_dst,
+                                weights=_edge_weights,
+                                nodes=_nodes)
         kernel_filenames.append(out_kernel_filename)
 
 
     for in_file, out_file in zip(in_files, out_files):
 
         signal_image = nib.load(in_file)
-        signal_data = signal_image.get_fdata()
-        if signal_data.ndim == 3:
-            signal_data = signal_data[..., None]
 
         if resample_resolution is not None:
             logging.debug("Resampling signal data from shape %s to %s",
-                          signal_data.shape, shape)
-            signal_data = resample_data_to_shape(signal_data, shape)
+                          signal_image.shape, shape)
+            signal_data = nilearn.image.resample_to_img(source_img=signal_image,
+                                                        target_img=reference_image,
+                                                        interpolation="linear",
+                                                        force_resample=True,
+                                                        copy_header=True).get_fdata()
+        else:
+            signal_data = signal_image.get_fdata()
+
+        if signal_data.ndim == 3:
+            signal_data = signal_data[..., None]
+
+        _shape = signal_data.shape
 
         signal_data = signal_data.reshape(-1, signal_data.shape[-1])
         smoothed_signal_data = signal_data.copy()
@@ -269,12 +278,21 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
                                                                       _edge_dst,
                                                                       _edge_weights)
 
-            if resample_resolution is not None:
-                smoothed_signal_data = resample_data_to_shape(smoothed_signal_data, original_shape)
-            smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(original_shape + (-1,)), signal_image.affine)
+        smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
+                                         affine=affine)
+        if resample_resolution is not None:
+            logging.debug("Resampling smoothed image from shape %s to %s",
+                      smoothed_image.shape, reference_image.shape)
+            smoothed_signal_data = nilearn.image.resample_to_img(
+                source_img=smoothed_image,
+                target_img=signal_image,
+                interpolation="linear",
+                force_resample=True,
+                copy_header=True)
 
-            os.makedirs(os.path.dirname(out_file), exist_ok=True)
-            smoothed_image.to_filename(out_file)
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        logging.info(f"Saving smoothed image to {out_file}")
+        smoothed_image.to_filename(out_file)
 
 
 def parse_args():

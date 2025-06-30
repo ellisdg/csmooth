@@ -8,3 +8,4 @@ nx-parallel
 pygsp2
 trimesh
 embreex
+xxhash

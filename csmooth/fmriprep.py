@@ -150,7 +150,10 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
-    kernel_basename = os.path.join(output_subject_dir, "cache", "csmooth_kernel")
+    kernel_basename = os.path.join(output_subject_dir,
+                                   "cache",
+                                   "csmooth_kernel_fwhm-{}mm_voxel-{}mm".format(
+        parameters.get("fwhm", None), parameters.get("voxel_size", None)))
     resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
 
     smooth_images(in_files=files["bold_files"],
