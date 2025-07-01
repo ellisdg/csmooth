@@ -31,8 +31,8 @@ def find_bold_files(fmriprep_subject_dir):
     :return: A list of BOLD files
     """
 
-    bold_files = glob.glob(os.path.join(fmriprep_subject_dir, "**", "func", "*_space-T1w_desc-preproc_bold.nii.gz"),
-                           recursive=True)
+    bold_files = sorted(glob.glob(os.path.join(fmriprep_subject_dir, "**", "func", "*_space-T1w_desc-preproc_bold.nii.gz"),
+                           recursive=True))
     if not bold_files:
         raise FileNotFoundError(f"No BOLD files found in {fmriprep_subject_dir}/func")
 

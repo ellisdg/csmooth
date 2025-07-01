@@ -239,6 +239,8 @@ def load_image(in_file, reference_image=None):
 def load_reference_image(reference_file, resample_resolution=None):
     first_image = nib.load(reference_file)
     if resample_resolution is not None:
+        logging.debug("Resampling reference image from shape %s to resolution %s",
+                      first_image.shape, resample_resolution)
         _affine = adjust_affine_spacing(first_image.affine, np.asarray(resample_resolution))
         reference_data = resample_data_to_affine(first_image.get_fdata()[..., 0],
                                                  target_affine=_affine,
@@ -292,6 +294,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
     # Estimate optimal tau for each component to achieve the target fwhm
     main_labels = sorted_labels[:5]
     taus = list()
+    initial_tau = fwhm
     for label in tqdm(main_labels, desc="Finding optimal taus", unit="component"):
         _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src=edge_src,
@@ -304,10 +307,13 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
                                 edge_src=_edge_src,
                                 edge_dst=_edge_dst,
                                 edge_distances=_edge_distances,
-                                shape=(len(_nodes),))
+                                shape=(len(_nodes),),
+                                initial_tua=initial_tau)
         taus.append(_tau)
+        # update initial tau to the last estimated tau
+        initial_tau = _tau
 
-    for in_file, out_file in zip(in_files, out_files):
+    for in_file, out_file in tqdm(zip(in_files, out_files), desc="Smoothing images", unit="image"):
 
         signal_image, orig_image = load_image(in_file, reference_image=resampled_reference)
         signal_data = signal_image.get_fdata()
@@ -318,12 +324,19 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
         _shape = signal_data.shape
 
         signal_data = signal_data.reshape(-1, signal_data.shape[-1])
-        # smooth all the data with the mean estimated tau
-        smoothed_signal_data = heat_kernel_smoothing(edge_src=edge_src,
-                                                     edge_dst=edge_dst,
-                                                     edge_distances=edge_distances,
-                                                     signal_data=signal_data,
-                                                     tau=np.mean(taus))
+        smoothed_signal_data = signal_data.copy()
+        # smooth the background data with the mean estimated tau
+        smooth_component(
+            edge_src=edge_src,
+            edge_dst=edge_dst,
+            edge_distances=edge_distances,
+            signal_data=signal_data,
+            labels=labels[5:],
+            label=None,  # None means all nodes
+            unique_nodes=unique_nodes,
+            smoothed_signal_data=smoothed_signal_data,
+            tau=np.mean(taus)  # Use the mean tau for all components
+        )
         # smooth each main component with the estimated tau
         for label, _tau in zip(main_labels, taus):
             smooth_component(edge_src=edge_src,
