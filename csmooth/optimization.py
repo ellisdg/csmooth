@@ -54,19 +54,20 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
     random_noise = np.random.randn(*shape)
     mae = np.inf
     current_fwhm = np.nan
+    previous_tau = tau
     for i in range(start_iteration, max_iterations):
         smoothed_noise = heat_kernel_smoothing(signal_data=random_noise, tau=tau, edge_src=edge_src,
                                                edge_dst=edge_dst, edge_distances=edge_distances)
         current_fwhm = estimate_fwhm(edge_src=edge_src, edge_dst=edge_dst,
                                      edge_distances=edge_distances, signal_data=smoothed_noise)
         logging.debug(f"Iteration {i}: current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f} tau: {tau:.2f}")
-        last_mae = mae
+        previous_mae = mae
         mae = np.abs(current_fwhm - fwhm)
-        if mae > last_mae:
-            logging.warning(f"MAE increased from {last_mae:.4f} to {mae:.4f}. "
+        if mae > previous_mae:
+            logging.warning(f"MAE increased from {previous_mae:.4f} to {mae:.4f}. "
                             f"Retrying with half the learning rate.")
             tau = find_optimal_tau(fwhm=fwhm, edge_src=edge_src, edge_dst=edge_dst,
-                                   edge_distances=edge_distances, shape=shape, initial_tau=tau,
+                                   edge_distances=edge_distances, shape=shape, initial_tau=previous_tau,
                                    max_iterations=max_iterations, stop_threshold=stop_threshold,
                                    learning_rate=learning_rate/2, decay_rate=decay_rate,
                                    random_seed=random_seed, log_time=False, start_iteration=i+1)
@@ -79,6 +80,7 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
                             f"tau: {tau:.2f}.")
             break
         gradient = (current_fwhm - fwhm) / mae
+        previous_tau = tau
         tau -= learning_rate * gradient * mae
         learning_rate *= decay_rate
 
