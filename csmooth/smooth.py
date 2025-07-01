@@ -331,8 +331,8 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
             edge_dst=edge_dst,
             edge_distances=edge_distances,
             signal_data=signal_data,
-            labels=labels[5:],
-            label=None,  # None means all nodes
+            labels=labels,
+            label=sorted_labels[5:],  # None means all nodes
             unique_nodes=unique_nodes,
             smoothed_signal_data=smoothed_signal_data,
             tau=np.mean(taus)  # Use the mean tau for all components
@@ -563,9 +563,10 @@ def main():
         output_labelmap = os.path.splitext(args.out_file)[0] + "_components.nii.gz"
 
     if os.path.exists(args.out_file):
-        if args.no_overwrite:
+        if not args.no_overwrite:
             warnings.warn(f"Output file {args.out_file} already exists.")
             warnings.warn("Exiting. Use --no_overwrite to overwrite existing files.")
+            return
         else:
             warnings.warn(f"Overwriting existing file: {args.out_file}.")
 

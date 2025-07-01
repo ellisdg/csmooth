@@ -150,6 +150,14 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
+    for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
+        if os.path.exists(output_filename):
+            logging.warning(f"Output file already exists, skipping: {output_filename}")
+            files["bold_files"].remove(input_filename)
+            output_filenames.remove(output_filename)
+    if not files["bold_files"]:
+        logging.info(f"All output files already exist in {output_subject_dir}, skipping processing.")
+        return
     kernel_basename = os.path.join(output_subject_dir,
                                    "cache",
                                    "csmooth_kernel_fwhm-{}mm_voxel-{}mm".format(

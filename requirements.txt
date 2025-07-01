@@ -5,7 +5,7 @@ nilearn
 tqdm
 networkx
 nx-parallel
-pygsp2
+pygsp
 trimesh
 embreex
 xxhash
