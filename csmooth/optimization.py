@@ -62,6 +62,14 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_tu
         logging.debug(f"Iteration {i}: current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f} tau: {tua:.2f}")
         last_mae = mae
         mae = np.abs(current_fwhm - fwhm)
+        if mae > last_mae:
+            logging.warning(f"MAE increased from {last_mae:.4f} to {mae:.4f}. "
+                            f"Retrying with half the learning rate.")
+            return find_optimal_tau(fwhm=fwhm, edge_src=edge_src, edge_dst=edge_dst,
+                                edge_distances=edge_distances, shape=shape, initial_tua=tua,
+                                max_iterations=max_iterations, stop_threshold=stop_threshold,
+                                learning_rate=learning_rate/2, decay_rate=decay_rate,
+                                random_seed=random_seed)
         if mae < stop_threshold:
             break
 
@@ -69,11 +77,7 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_tu
         tua -= learning_rate * gradient * mae
         learning_rate *= decay_rate
 
-        if mae > last_mae:
-            logging.warning(f"MAE increased from {last_mae:.4f} to {mae:.4f}. "
-                            f"Halving the learning rate and resetting tau.")
-            learning_rate /= 2.0
-            tua = initial_tua
+
 
     end_time = time.time()
     logging.info(f"Optimal tau: {tua:.2f}, "
