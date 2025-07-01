@@ -151,7 +151,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
     for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
-        if os.path.exists(output_filename):
+        if not parameters["overwrite"] and os.path.exists(output_filename):
             logging.warning(f"Output file already exists, skipping: {output_filename}")
             files["bold_files"].remove(input_filename)
             output_filenames.remove(output_filename)

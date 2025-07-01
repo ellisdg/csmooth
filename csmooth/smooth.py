@@ -6,6 +6,7 @@ import scipy
 import nibabel as nib
 import os
 from tqdm import tqdm
+import time
 
 from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
 from csmooth.graph import create_graph, identify_connected_components, select_nodes
@@ -51,6 +52,7 @@ def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
 
 def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
                      smoothed_signal_data, tau=None, fwhm=None, n_jobs=4):
+    start_time = time.time()
     _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
                                                                  edge_dst=edge_dst,
                                                                  edge_distances=edge_distances,
@@ -65,6 +67,8 @@ def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, la
                                        fwhm=fwhm,
                                        n_jobs=n_jobs)
     smoothed_signal_data[_nodes, :] = _smoothed_data
+    elapsed_time = time.time() - start_time
+    logging.debug(f"Smoothing component {label} with {len(_nodes)} nodes took {elapsed_time:.2f} seconds.")
 
 
 def load_and_resample_image(in_file, resample_resolution):
@@ -294,7 +298,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
     # Estimate optimal tau for each component to achieve the target fwhm
     main_labels = sorted_labels[:5]
     taus = list()
-    initial_tau = fwhm
+    initial_tau = 2*fwhm
     for label in tqdm(main_labels, desc="Finding optimal taus", unit="component"):
         _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src=edge_src,
@@ -313,7 +317,9 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
         # update initial tau to the last estimated tau
         initial_tau = _tau
 
-    for in_file, out_file in tqdm(zip(in_files, out_files), desc="Smoothing images", unit="image"):
+    for i in tqdm(range(len(in_files)), desc="Smoothing images", unit="image"):
+        in_file = in_files[i]
+        out_file = out_files[i]
 
         signal_image, orig_image = load_image(in_file, reference_image=resampled_reference)
         signal_data = signal_image.get_fdata()
@@ -332,7 +338,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
             edge_distances=edge_distances,
             signal_data=signal_data,
             labels=labels,
-            label=sorted_labels[5:],  # None means all nodes
+            label=sorted_labels[5:],  # smooth the rest of the components with the mean tau
             unique_nodes=unique_nodes,
             smoothed_signal_data=smoothed_signal_data,
             tau=np.mean(taus)  # Use the mean tau for all components
@@ -531,8 +537,8 @@ def add_parameter_args(parser):
                              "If None, no dilation is done. Default is 3.")
     parser.add_argument("--multiproc", type=int, default=4,
                         help="Number of parallel processes to use for smoothing.")
-    parser.add_argument("--no_overwrite", action='store_true',
-                        help="If set, do not overwrite existing output files. Default is to overwrite.")
+    parser.add_argument("--overwrite", action='store_true',
+                        help="If set, overwrite existing output files. Default is to not overwrite.")
     parser.add_argument("--voxel_size", type=float, default=2.0,
                         help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
@@ -563,12 +569,12 @@ def main():
         output_labelmap = os.path.splitext(args.out_file)[0] + "_components.nii.gz"
 
     if os.path.exists(args.out_file):
-        if not args.no_overwrite:
-            warnings.warn(f"Output file {args.out_file} already exists.")
-            warnings.warn("Exiting. Use --no_overwrite to overwrite existing files.")
-            return
-        else:
+        if args.overwrite:
             warnings.warn(f"Overwriting existing file: {args.out_file}.")
+        else:
+            warnings.warn(f"Output file {args.out_file} already exists.")
+            warnings.warn("Exiting. Use --overwrite to overwrite existing files.")
+            return
 
     smooth_image(in_file=args.in_file,
                  out_file=args.out_file,
