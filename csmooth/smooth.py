@@ -312,7 +312,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
                                 edge_dst=_edge_dst,
                                 edge_distances=_edge_distances,
                                 shape=(len(_nodes),),
-                                initial_tua=initial_tau)
+                                initial_tau=initial_tau)
         taus.append(_tau)
         # update initial tau to the last estimated tau
         initial_tau = _tau
