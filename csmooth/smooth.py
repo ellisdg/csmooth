@@ -11,6 +11,7 @@ from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply
 from csmooth.graph import create_graph, identify_connected_components, select_nodes
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
+from csmooth.optimization import find_optimal_tau
 
 
 def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
@@ -175,49 +176,21 @@ def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_l
     smoothed_image.to_filename(out_file)
 
 
-def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=None, fwhm=None,
-                  surface_affine=None,
-                  output_labelmap=None,
-                  resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4):
+def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes,
+                                out_kernel_basename, fwhm, multiproc=4):
     """
-    Smooth an image using graph signal smoothing.
-    :param in_files: Path to a Nifti file to be smoothed.
-    :param out_files: Output filename to save the smoothed image.
-    :param out_kernel_basename: filepath to save smoothing kernel files. The label number and '.npz' will be
-    appended to the basename for each component.
-    :param surface_files: List of surface filenames to use for edge pruning.
-    :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
-    :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
-    :param surface_affine: Optional affine matrix to apply to the surface coordinates to align them to the image space.
-    :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
-    :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
-    Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
-    smoothing, the image is resampled back to the original resolution.
-    :param mask_file: Optional filename of a mask to use for smoothing. This can speed up processing and reduce
-     computational requirements, If None, no mask is used.
-    :param mask_dilation: Optional number of voxels to dilate the mask by. This can help to include more voxels in the
-        smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
-        signal image resampling is done, the mask is dilated in the signal image space (not the mask image space).
-        If no mask filename is provided, this parameter is ignored.
-    :param multiproc: Number of processes to run in parallel.
+    Precompute Gaussian kernels for each component and save to file.
+    :param edge_src:
+    :param edge_dst:
+    :param edge_distances:
+    :param labels:
+    :param sorted_labels:
+    :param unique_nodes:
+    :param out_kernel_basename:
+    :param fwhm:
+    :param multiproc:
     :return:
     """
-
-    if tau is not None:
-        raise NotImplementedError("Smoothing with tau is not yet supported for multiple images.")
-
-    # TODO: check that all the bold images are aligned
-    reference_image, affine, shape, original_shape, original_affine = load_and_resample_image(in_files[0],
-                                                                                              resample_resolution)
-    mask_array = process_mask(mask_file, reference_image, mask_dilation)
-    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files,
-                                                      surface_affine=surface_affine)
-
-    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
-
-    if output_labelmap is not None:
-        save_labelmap(output_labelmap, shape, affine, labels, sorted_labels, unique_nodes)
-
     # for each component, compute the gaussian kernels and save to file
     kernel_filenames = []
     os.makedirs(os.path.dirname(out_kernel_basename), exist_ok=True)
@@ -241,22 +214,149 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
                                 weights=_edge_weights,
                                 nodes=_nodes)
         kernel_filenames.append(out_kernel_filename)
+    return kernel_filenames
 
+
+def load_image(in_file, reference_image=None):
+    """
+    Load an image and resample it to the reference image if provided.
+    :param in_file: Path to the input image file.
+    :param reference_image: Optional reference image to resample to.
+    :return: Loaded image as a nibabel Nifti1Image object.
+    """
+    source_image = nib.load(in_file)
+    if reference_image is not None:
+        resampled_image = nilearn.image.resample_to_img(source_img=source_image,
+                                                     target_img=reference_image,
+                                                     interpolation="linear",
+                                                     force_resample=True,
+                                                     copy_header=True)
+        return resampled_image, source_image
+    else:
+        return source_image, None
+
+
+def load_reference_image(reference_file, resample_resolution=None):
+    first_image = nib.load(reference_file)
+    if resample_resolution is not None:
+        _affine = adjust_affine_spacing(first_image.affine, np.asarray(resample_resolution))
+        reference_data = resample_data_to_affine(first_image.get_fdata()[..., 0],
+                                                 target_affine=_affine,
+                                                 original_affine=first_image.affine)
+        _shape = reference_data.shape[:3]
+        reference_image = nib.Nifti1Image(reference_data, _affine)
+        resampled_reference = reference_image
+    else:
+        reference_image = first_image
+        resampled_reference = None
+
+    return reference_image, resampled_reference
+
+
+
+def write_image(image, out_file, target_image=None):
+
+    if target_image is not None:
+        logging.debug("Resampling smoothed image from shape %s to %s",
+                      image.shape, target_image.shape)
+        image = nilearn.image.resample_to_img(
+            source_img=image,
+            target_img=target_image,
+            interpolation="linear",
+            force_resample=True,
+            copy_header=True)
+
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    logging.info(f"Saving smoothed image to {out_file}")
+    image.to_filename(out_file)
+
+
+def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, edge_distances, labels, sorted_labels,
+                                       unique_nodes, fwhm, resampled_reference=None):
+    """
+    Apply estimated Gaussian smoothing to a list of images based on the provided graph structure.
+    Finds the optimal tau for each of the five largest components in the graph (background, wm left/right, gm left/right).
+    The rest of the components are smoothed with the mean tau of the five largest components.
+    :param in_files: List of input image files to be smoothed.
+    :param out_files: List of output image files to save the smoothed images.
+    :param edge_src: Source nodes of the graph edges.
+    :param edge_dst: Destination nodes of the graph edges.
+    :param edge_distances: Distances of the graph edges.
+    :param labels: Labels for each node in the graph.
+    :param sorted_labels: Sorted list of labels by size of components.
+    :param unique_nodes: Unique nodes in the graph.
+    :param fwhm: Target full width at half maximum in mm for smoothing.
+    :param resampled_reference: Optional reference image to resample the smoothed images to.
+    :return: None
+    """
+    # Estimate optimal tau for each component to achieve the target fwhm
+    main_labels = sorted_labels[:5]
+    taus = list()
+    for label in tqdm(main_labels, desc="Finding optimal taus", unit="component"):
+        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
+            edge_src=edge_src,
+            edge_dst=edge_dst,
+            edge_distances=edge_distances,
+            labels=labels,
+            label=label,
+            unique_nodes=unique_nodes)
+        _tau = find_optimal_tau(fwhm=fwhm,
+                                edge_src=_edge_src,
+                                edge_dst=_edge_dst,
+                                edge_distances=_edge_distances,
+                                shape=(len(_nodes),))
+        taus.append(_tau)
 
     for in_file, out_file in zip(in_files, out_files):
 
-        signal_image = nib.load(in_file)
+        signal_image, orig_image = load_image(in_file, reference_image=resampled_reference)
+        signal_data = signal_image.get_fdata()
 
-        if resample_resolution is not None:
-            logging.debug("Resampling signal data from shape %s to %s",
-                          signal_image.shape, shape)
-            signal_data = nilearn.image.resample_to_img(source_img=signal_image,
-                                                        target_img=reference_image,
-                                                        interpolation="linear",
-                                                        force_resample=True,
-                                                        copy_header=True).get_fdata()
-        else:
-            signal_data = signal_image.get_fdata()
+        if signal_data.ndim == 3:
+            signal_data = signal_data[..., None]
+
+        _shape = signal_data.shape
+
+        signal_data = signal_data.reshape(-1, signal_data.shape[-1])
+        # smooth all the data with the mean estimated tau
+        smoothed_signal_data = heat_kernel_smoothing(edge_src=edge_src,
+                                                     edge_dst=edge_dst,
+                                                     edge_distances=edge_distances,
+                                                     signal_data=signal_data,
+                                                     tau=np.mean(taus))
+        # smooth each main component with the estimated tau
+        for label, _tau in zip(main_labels, taus):
+            smooth_component(edge_src=edge_src,
+                                edge_dst=edge_dst,
+                                edge_distances=edge_distances,
+                                signal_data=signal_data,
+                                labels=labels,
+                                label=label,
+                                unique_nodes=unique_nodes,
+                                smoothed_signal_data=smoothed_signal_data,
+                                tau=_tau)
+
+        smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
+                                         affine=signal_image.affine)
+
+        write_image(image=smoothed_image,
+                    out_file=out_file,
+                    target_image=orig_image)
+
+
+def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_reference=None):
+    """
+    Apply precomputed Gaussian kernels to smooth images.
+    :param in_files:
+    :param out_files:
+    :param kernel_filenames:
+    :param resampled_reference:
+    :return:
+    """
+    for in_file, out_file in zip(in_files, out_files):
+
+        signal_image, orig_image = load_image(in_file, reference_image=resampled_reference)
+        signal_data = signal_image.get_fdata()
 
         if signal_data.ndim == 3:
             signal_data = signal_data[..., None]
@@ -279,20 +379,95 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename, tau=N
                                                                       _edge_weights)
 
         smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
-                                         affine=affine)
-        if resample_resolution is not None:
-            logging.debug("Resampling smoothed image from shape %s to %s",
-                      smoothed_image.shape, reference_image.shape)
-            smoothed_signal_data = nilearn.image.resample_to_img(
-                source_img=smoothed_image,
-                target_img=signal_image,
-                interpolation="linear",
-                force_resample=True,
-                copy_header=True)
+                                         affine=signal_image.affine)
+        write_image(image=smoothed_image,
+                    out_file=out_file,
+                    target_image=orig_image)
 
-        os.makedirs(os.path.dirname(out_file), exist_ok=True)
-        logging.info(f"Saving smoothed image to {out_file}")
-        smoothed_image.to_filename(out_file)
+
+def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
+                  surface_affine=None,
+                  output_labelmap=None,
+                  resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4,
+                  estimate=True):
+    """
+    Smooth an image using graph signal smoothing.
+    :param in_files: Path to a Nifti files to be smoothed.
+    :param out_files: Output filenames to save the smoothed image.
+    :param out_kernel_basename: filepath to save smoothing kernel files. The label number and '.npz' will be
+    appended to the basename for each component. Required if fwhm is provided and estimate is False.
+    :param surface_files: List of surface filenames to use for edge pruning.
+    :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
+    :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
+    :param surface_affine: Optional affine matrix to apply to the surface coordinates to align them to the image space.
+    :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
+    :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
+    Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
+    smoothing, the image is resampled back to the original resolution.
+    :param mask_file: Optional filename of a mask to use for smoothing. This can speed up processing and reduce
+     computational requirements, If None, no mask is used.
+    :param mask_dilation: Optional number of voxels to dilate the mask by. This can help to include more voxels in the
+        smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
+        signal image resampling is done, the mask is dilated in the signal image space (not the mask image space).
+        If no mask filename is provided, this parameter is ignored.
+    :param multiproc: Number of processes to run in parallel.
+    :param estimate: If True, estimate the optimal tau for each component to achieve the target fwhm. This is
+    much faster than computing the Gaussian kernels but may result in slightly different smoothing. If False,
+    precompute the Gaussian kernels for each component and save to file which could take a very long time.
+    :return:
+    """
+    # TODO: check that all the bold images are aligned
+
+    reference_image, resampled_reference = load_reference_image(in_files[0], resample_resolution)
+
+    mask_array = process_mask(mask_file, reference_image, mask_dilation)
+    edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files,
+                                                      surface_affine=surface_affine)
+
+    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
+
+    if output_labelmap is not None:
+        save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels, unique_nodes)
+
+
+    if tau is not None:
+        raise NotImplementedError("Smoothing with tau is not yet supported for multiple images.")
+    elif fwhm is not None:
+        if estimate:
+            apply_estimated_gaussian_smoothing(
+                in_files=in_files,
+                                                  out_files=out_files,
+                                                  edge_src=edge_src,
+                                                  edge_dst=edge_dst,
+                                                  edge_distances=edge_distances,
+                                                  labels=labels,
+                                                  sorted_labels=sorted_labels,
+                                                  unique_nodes=unique_nodes,
+                                                  fwhm=fwhm,
+                                                  resampled_reference=resampled_reference)
+        else:
+            warnings.warn("Computing Gaussian kernels for each component. This may take a very long time for "
+                          "large Guassian FWHM values and/or high resolution images.")
+            if out_kernel_basename is None:
+                raise ValueError("out_kernel_basename must be provided if fwhm is provided and estimate is False.")
+
+            kernel_filenames = precompute_guassian_kernels(
+                edge_src=edge_src,
+                                                           edge_dst=edge_dst,
+                                                           edge_distances=edge_distances,
+                                                           labels=labels,
+                                                           sorted_labels=sorted_labels,
+                                                           unique_nodes=unique_nodes,
+                                                           out_kernel_basename=out_kernel_basename,
+                                                           fwhm=fwhm,
+                                                           multiproc=multiproc)
+
+            apply_precomputed_kernels(
+                in_files=in_files,
+                                      out_files=out_files,
+                                      kernel_filenames=kernel_filenames,
+                                      resampled_reference=resampled_reference)
+
 
 
 def parse_args():
