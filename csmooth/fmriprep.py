@@ -1,6 +1,7 @@
 import glob
 import os
 import logging
+import networkx as nx
 
 from csmooth.smooth import add_parameter_args, check_parameters, smooth_images
 
@@ -173,7 +174,6 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   output_labelmap=output_labelmap_file,
                   tau=parameters.get("tau", None),
                   fwhm=parameters.get("fwhm", None),
-                  multiproc=parameters.get("multiproc", None),
                   mask_dilation=parameters.get("mask_dilation", None),
                   resample_resolution=resample_resolution)
 
@@ -201,6 +201,11 @@ def main():
     fmriprep_dir = kwargs.pop("fmriprep_dir")
     output_dir = kwargs.pop("output_dir")
     subject_id = kwargs.pop("subject")
+
+    # Enable NetworkX parallel configuration
+    nx.config.backends.parallel.active = True
+    nx.config.backends.parallel.n_jobs = kwargs["multiproc"]
+
     if subject_id is None:
         subject_dirs = sorted(glob.glob(os.path.join(fmriprep_dir, "sub-*")))
         for fmriprep_subject_dir in subject_dirs:

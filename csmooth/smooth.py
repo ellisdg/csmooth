@@ -7,12 +7,15 @@ import nibabel as nib
 import os
 from tqdm import tqdm
 import time
+import networkx as nx
 
 from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
-from csmooth.graph import create_graph, identify_connected_components, select_nodes
+from csmooth.graph import create_graph, select_nodes
+from csmooth.components import identify_connected_components
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
 from csmooth.optimization import find_optimal_tau
+from csmooth.components import check_for_bottlenecks
 
 
 def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
@@ -129,7 +132,7 @@ def smooth_components(edge_src, edge_dst, edge_distances, signal_data, labels, s
 
 
 def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_labelmap=None,
-                 resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4):
+                 resample_resolution=None, mask_file=None, mask_dilation=3):
     """
     Smooth an image using graph signal smoothing.
     :param in_file: Path to a Nifti file to be smoothed.
@@ -170,7 +173,7 @@ def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_l
 
     signal_data = signal_data.reshape(-1, signal_data.shape[-1])
     smoothed_signal_data = smooth_components(edge_src, edge_dst, edge_distances, signal_data, labels, sorted_labels,
-                                             unique_nodes, tau, fwhm, n_jobs=multiproc)
+                                             unique_nodes, tau, fwhm)
 
     if resample_resolution is not None:
         smoothed_signal_data = resample_data_to_shape(smoothed_signal_data, original_shape)
@@ -181,7 +184,7 @@ def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_l
 
 
 def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes,
-                                out_kernel_basename, fwhm, multiproc=4):
+                                out_kernel_basename, fwhm):
     """
     Precompute Gaussian kernels for each component and save to file.
     :param edge_src:
@@ -192,7 +195,6 @@ def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sort
     :param unique_nodes:
     :param out_kernel_basename:
     :param fwhm:
-    :param multiproc:
     :return:
     """
     # for each component, compute the gaussian kernels and save to file
@@ -210,8 +212,7 @@ def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sort
             _edge_src, _edge_dst, _edge_weights = compute_gaussian_kernels(edge_src=_edge_src,
                                                                            edge_dst=_edge_dst,
                                                                            edge_distances=_edge_distances,
-                                                                           fwhm=fwhm,
-                                                                           n_jobs=multiproc)
+                                                                           fwhm=fwhm)
             np.savez_compressed(out_kernel_filename,
                                 src=_edge_src,
                                 dst=_edge_dst,
@@ -407,7 +408,7 @@ def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_r
 def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
                   surface_affine=None,
                   output_labelmap=None,
-                  resample_resolution=None, mask_file=None, mask_dilation=3, multiproc=4,
+                  resample_resolution=None, mask_file=None, mask_dilation=3,
                   estimate=True):
     """
     Smooth an image using graph signal smoothing.
@@ -429,7 +430,6 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
         smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
         signal image resampling is done, the mask is dilated in the signal image space (not the mask image space).
         If no mask filename is provided, this parameter is ignored.
-    :param multiproc: Number of processes to run in parallel.
     :param estimate: If True, estimate the optimal tau for each component to achieve the target fwhm. This is
     much faster than computing the Gaussian kernels but may result in slightly different smoothing. If False,
     precompute the Gaussian kernels for each component and save to file which could take a very long time.
@@ -444,6 +444,15 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                                                       surface_affine=surface_affine)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
+    for label in sorted_labels[:5]:
+        check_for_bottlenecks(
+            edge_src=edge_src,
+            edge_dst=edge_dst,
+            edge_distances=edge_distances,
+            label=label,
+            labels=labels,
+            unique_nodes=unique_nodes
+        )
 
     if output_labelmap is not None:
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels, unique_nodes)
@@ -478,8 +487,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                                                            sorted_labels=sorted_labels,
                                                            unique_nodes=unique_nodes,
                                                            out_kernel_basename=out_kernel_basename,
-                                                           fwhm=fwhm,
-                                                           multiproc=multiproc)
+                                                           fwhm=fwhm)
 
             apply_precomputed_kernels(
                 in_files=in_files,
@@ -561,6 +569,10 @@ def check_parameters(args, parser):
 
 def main():
     args = parse_args()
+
+    # Enable NetworkX parallel configuration
+    nx.config.backends.parallel.active = True
+    nx.config.backends.parallel.n_jobs = args.multiproc
 
     output_labelmap = args.output_labelmap
     if output_labelmap.lower() == "none":

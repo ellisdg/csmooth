@@ -1,8 +1,6 @@
+import logging
 import nibabel as nib
 import numpy as np
-from scipy.sparse.csgraph import connected_components
-
-from csmooth.matrix import create_adjacency_matrix
 
 
 def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
@@ -39,17 +37,18 @@ def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
     # Retain connections with lengths that are shorter than the distance to the surface intersection
     # (i.e. the edge does not intersect with the surface)
     retained_mask[indices_ray] = edge_src_to_intersection > lengths[indices_ray]
-    print("Starting edges:", len(edges_src))
-    print("Retained edges:", retained_mask.sum())
-    print("Removed edges:", (~retained_mask).sum())
+    logging.info(f"Starting edges: {len(edges_src)}")
+    logging.info(f"Retained edges: {retained_mask.sum()}")
+    logging.info(f"Removed edges: {(~retained_mask).sum()}")
     return retained_mask
 
 
 def remove_edges_intersecting_surface_files(edges_src, edges_dst, surface_filenames, affine):
-    print("Removing edges intersecting with surfaces")
+    logging.info("Removing edges intersecting with surfaces")
     edge_mask = np.ones(len(edges_src), dtype=bool)
+
     for surface_filename in surface_filenames:
-        print("Loading surface:", surface_filename)
+        logging.info(f"Loading surface: {surface_filename}")
         surface = nib.load(surface_filename)
         coords, triangles = surface.agg_data()
         voxel_coords = np.linalg.solve(affine, np.hstack((coords, np.ones((coords.shape[0], 1)))).T).T[:, :3]
@@ -164,23 +163,6 @@ def create_graph(mask_array, affine, surface_files, surface_affine=None):
     edge_distances= edge_distances[edge_mask]
 
     return edge_src, edge_dst, edge_distances
-
-
-def identify_connected_components(edge_src, edge_dst, edge_distances):
-    """
-    Identify connected components in a graph defined by edges and distances.
-    :param edge_src:
-    :param edge_dst:
-    :param edge_distances:
-    :return: labels: numpy array of labels for each node in the graph,
-             sorted_labels: numpy array of sorted labels by size of components.
-    """
-
-    adjacency_matrix, unique_nodes = create_adjacency_matrix(edge_src, edge_dst, weights=edge_distances)
-    n_components, labels = connected_components(csgraph=adjacency_matrix.tocsr(), directed=False, return_labels=True)
-    sorted_labels = np.argsort([(labels == l).sum() for l in np.unique(labels)])[::-1]
-
-    return labels, sorted_labels, unique_nodes
 
 
 def select_nodes(edge_src, edge_dst, edge_distances, labels, label, unique_nodes):

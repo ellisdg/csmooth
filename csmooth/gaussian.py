@@ -7,11 +7,7 @@ import nx_parallel as nxp
 from csmooth.matrix import create_adjacency_matrix
 
 
-def networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=None, n_jobs=4):
-
-    nx.config.backends.parallel.active = True
-    nx.config.backends.parallel.n_jobs = n_jobs
-
+def networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=None):
     # create graph
     G = nx.Graph()
     unique_nodes = np.unique(np.concatenate((edge_src, edge_dst)))
@@ -23,8 +19,8 @@ def networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=None, n_
     return result
 
 
-def networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, cutoff=None, n_jobs=4):
-    result = networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=cutoff, n_jobs=n_jobs)
+def networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, cutoff=None):
+    result = networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=cutoff)
     # for each src node, compute the gaussian kernel based on the distances
     new_edge_src = list()
     new_edge_dst = list()
@@ -47,7 +43,7 @@ def networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, cutoff=N
     return new_edge_src, new_edge_dst, new_edge_weights
 
 
-def compute_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, n_jobs=4):
+def compute_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm):
     """
     Compute Gaussian kernels for smoothing a graph signal.
     :param edge_src:
@@ -63,15 +59,14 @@ def compute_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm, n_jobs=4)
     logging.info("Computing Gaussian weights...")
     start = time.time()
     edge_src, edge_dst, edge_weights = networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm,
-                                                                 cutoff=cutoff,
-                                                                 n_jobs=n_jobs)
+                                                                 cutoff=cutoff)
     end = time.time()
     run_time = (end - start) / 60
     logging.info(f"Time taken to compute Gaussian weights: {run_time:.2f} minutes")
     return edge_src, edge_dst, edge_weights
 
 
-def gaussian_smoothing(data, edge_src, edge_dst, edge_distances, fwhm, n_jobs=4):
+def gaussian_smoothing(data, edge_src, edge_dst, edge_distances, fwhm):
     """
     Smooth a graph signal using a Gaussian kernel.
     :param data: fmri data of shape (n_voxels, n_timepoints)
@@ -86,7 +81,7 @@ def gaussian_smoothing(data, edge_src, edge_dst, edge_distances, fwhm, n_jobs=4)
     """
 
     edge_src, edge_dst, edge_weights = compute_gaussian_kernels(edge_src=edge_src, edge_dst=edge_dst,
-                                                        edge_distances=edge_distances, fwhm=fwhm, n_jobs=n_jobs)
+                                                        edge_distances=edge_distances, fwhm=fwhm)
 
     return apply_gaussian_smoothing(data=data, edge_src=edge_src, edge_dst=edge_dst, edge_weights=edge_weights)
 
