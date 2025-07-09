@@ -1,21 +1,22 @@
 import logging
+import os
+import time
 import warnings
+
+import networkx as nx
+import nibabel as nib
 import nilearn.image
 import numpy as np
 import scipy
-import nibabel as nib
-import os
 from tqdm import tqdm
-import time
-import networkx as nx
 
+from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
+from csmooth.components import check_components
+from csmooth.components import identify_connected_components
 from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
 from csmooth.graph import create_graph, select_nodes
-from csmooth.components import identify_connected_components
 from csmooth.heat import heat_kernel_smoothing
-from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
 from csmooth.optimization import find_optimal_tau
-from csmooth.components import check_for_bottlenecks
 
 
 def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
@@ -232,16 +233,23 @@ def load_image(in_file, reference_image=None):
     source_image = nib.load(in_file)
     if reference_image is not None:
         resampled_image = nilearn.image.resample_to_img(source_img=source_image,
-                                                     target_img=reference_image,
-                                                     interpolation="linear",
-                                                     force_resample=True,
-                                                     copy_header=True)
+                                                        target_img=reference_image,
+                                                        interpolation="linear",
+                                                        force_resample=True,
+                                                        copy_header=True)
         return resampled_image, source_image
     else:
         return source_image, None
 
 
 def load_reference_image(reference_file, resample_resolution=None):
+    """
+    :param reference_file:
+    :param resample_resolution:
+    :return:  If any resampling is done, the refererence image and the resampled reference image are the same.
+    Otherwise, the reference image is the first image and the resampled reference is None.
+
+    """
     first_image = nib.load(reference_file)
     if resample_resolution is not None:
         logging.debug("Resampling reference image from shape %s to resolution %s",
@@ -260,9 +268,7 @@ def load_reference_image(reference_file, resample_resolution=None):
     return reference_image, resampled_reference
 
 
-
 def write_image(image, out_file, target_image=None):
-
     if target_image is not None:
         logging.debug("Resampling smoothed image from shape %s to %s",
                       image.shape, target_image.shape)
@@ -299,7 +305,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
     # Estimate optimal tau for each component to achieve the target fwhm
     main_labels = sorted_labels[:5]
     taus = list()
-    initial_tau = 2*fwhm
+    initial_tau = 2 * fwhm
     for label in tqdm(main_labels, desc="Finding optimal taus", unit="component"):
         _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src=edge_src,
@@ -347,14 +353,14 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
         # smooth each main component with the estimated tau
         for label, _tau in zip(main_labels, taus):
             smooth_component(edge_src=edge_src,
-                                edge_dst=edge_dst,
-                                edge_distances=edge_distances,
-                                signal_data=signal_data,
-                                labels=labels,
-                                label=label,
-                                unique_nodes=unique_nodes,
-                                smoothed_signal_data=smoothed_signal_data,
-                                tau=_tau)
+                             edge_dst=edge_dst,
+                             edge_distances=edge_distances,
+                             signal_data=signal_data,
+                             labels=labels,
+                             label=label,
+                             unique_nodes=unique_nodes,
+                             smoothed_signal_data=smoothed_signal_data,
+                             tau=_tau)
 
         smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
                                          affine=signal_image.affine)
@@ -406,7 +412,7 @@ def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_r
 
 
 def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
-                  surface_affine=None,
+                  surface_affine=None, dseg_file=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
                   estimate=True):
@@ -420,6 +426,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
     :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
     :param surface_affine: Optional affine matrix to apply to the surface coordinates to align them to the image space.
+    :param dseg_file: Optional dseg file to use for indentifying and correcting components.
     :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
     :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
     Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
@@ -438,25 +445,28 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     # TODO: check that all the bold images are aligned
 
     reference_image, resampled_reference = load_reference_image(in_files[0], resample_resolution)
+    # reference image and resampled reference are the same if resampling is done, otherwise the resampled reference is None.
 
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
     edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files,
                                                       surface_affine=surface_affine)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
-    for label in sorted_labels[:5]:
-        check_for_bottlenecks(
-            edge_src=edge_src,
-            edge_dst=edge_dst,
-            edge_distances=edge_distances,
-            label=label,
-            labels=labels,
-            unique_nodes=unique_nodes
-        )
+    edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes = check_components(
+        edge_src=edge_src,
+        edge_dst=edge_dst,
+        edge_distances=edge_distances,
+        labels=labels,
+        unique_nodes=unique_nodes,
+        sorted_labels=sorted_labels,
+        n_components=5,
+        dseg_file=dseg_file,
+        reference_image=reference_image,
+    )
 
     if output_labelmap is not None:
-        save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels, unique_nodes)
-
+        save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
+                      unique_nodes)
 
     if tau is not None:
         raise NotImplementedError("Smoothing with tau is not yet supported for multiple images.")
@@ -464,15 +474,15 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
         if estimate:
             apply_estimated_gaussian_smoothing(
                 in_files=in_files,
-                                                  out_files=out_files,
-                                                  edge_src=edge_src,
-                                                  edge_dst=edge_dst,
-                                                  edge_distances=edge_distances,
-                                                  labels=labels,
-                                                  sorted_labels=sorted_labels,
-                                                  unique_nodes=unique_nodes,
-                                                  fwhm=fwhm,
-                                                  resampled_reference=resampled_reference)
+                out_files=out_files,
+                edge_src=edge_src,
+                edge_dst=edge_dst,
+                edge_distances=edge_distances,
+                labels=labels,
+                sorted_labels=sorted_labels,
+                unique_nodes=unique_nodes,
+                fwhm=fwhm,
+                resampled_reference=resampled_reference)
         else:
             warnings.warn("Computing Gaussian kernels for each component. This may take a very long time for "
                           "large Guassian FWHM values and/or high resolution images.")
@@ -481,20 +491,19 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
 
             kernel_filenames = precompute_guassian_kernels(
                 edge_src=edge_src,
-                                                           edge_dst=edge_dst,
-                                                           edge_distances=edge_distances,
-                                                           labels=labels,
-                                                           sorted_labels=sorted_labels,
-                                                           unique_nodes=unique_nodes,
-                                                           out_kernel_basename=out_kernel_basename,
-                                                           fwhm=fwhm)
+                edge_dst=edge_dst,
+                edge_distances=edge_distances,
+                labels=labels,
+                sorted_labels=sorted_labels,
+                unique_nodes=unique_nodes,
+                out_kernel_basename=out_kernel_basename,
+                fwhm=fwhm)
 
             apply_precomputed_kernels(
                 in_files=in_files,
-                                      out_files=out_files,
-                                      kernel_filenames=kernel_filenames,
-                                      resampled_reference=resampled_reference)
-
+                out_files=out_files,
+                kernel_filenames=kernel_filenames,
+                resampled_reference=resampled_reference)
 
 
 def parse_args():
@@ -522,7 +531,7 @@ def add_file_args(parser):
                              "Will be resampled to match input image resolution. "
                              "If not provided, the whole image is used which increases computational requirements "
                              "and runtime.")
-    #TODO: add option to use a labelmap instead of mask_file
+    # TODO: add option to use a labelmap instead of mask_file
     parser.add_argument("--output_labelmap", type=str,
                         help="Optional output labelmap filename to save the individual components that were smoothed. "
                              "By default, this is saved to the '{output_basename}_components.nii.gz'. "
@@ -566,7 +575,6 @@ def check_parameters(args, parser):
         logging.basicConfig(level=logging.DEBUG)
 
 
-
 def main():
     args = parse_args()
 
@@ -596,7 +604,7 @@ def main():
                  mask_file=args.mask_file,
                  mask_dilation=args.mask_dilation,
                  output_labelmap=output_labelmap,
-                 resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size),)
+                 resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size), )
 
     logging.info("Smoothing complete.")
 

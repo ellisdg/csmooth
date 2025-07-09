@@ -1,6 +1,8 @@
 import glob
 import os
 import logging
+
+
 import networkx as nx
 
 from csmooth.smooth import add_parameter_args, check_parameters, smooth_images
@@ -80,6 +82,19 @@ def find_surface_affine(fmriprep_subject_dir):
     return affine_files[0]  # Return the single affine file found
 
 
+def find_dseg_file(fmriprep_subject_dir):
+    """
+    Find the dseg file in the fmriprep subject directory.
+    """
+    dseg_files = glob.glob(os.path.join(fmriprep_subject_dir, "**", "anat", "*_dseg.nii.gz"), recursive=True)
+    dseg_files = [f for f in dseg_files if "space-MNI" not in f]
+    if not dseg_files:
+        raise FileNotFoundError(f"No dseg file found in {fmriprep_subject_dir}/anat")
+    if len(dseg_files) > 1:
+        raise ValueError(f"Expected exactly one dseg file, found {len(dseg_files)}: {dseg_files}")
+    return dseg_files[0]
+
+
 def find_fmriprep_files(fmriprep_subject_dir):
     """
     Find all necessary fMRIPrep files for a subject.
@@ -93,12 +108,14 @@ def find_fmriprep_files(fmriprep_subject_dir):
     bold_files = find_bold_files(fmriprep_subject_dir)
     mask_file = find_mask_file(fmriprep_subject_dir)
     surface_affine = find_surface_affine(fmriprep_subject_dir)
+    dseg_file = find_dseg_file(fmriprep_subject_dir)
 
     return {
         "surface_files": surface_files,
         "bold_files": bold_files,
         "mask_file": mask_file,
-        "surface_affine": surface_affine
+        "surface_affine": surface_affine,
+        "dseg_file": dseg_file
     }
 
 
@@ -170,6 +187,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   mask_file=files["mask_file"],
                   out_kernel_basename=kernel_basename,
                   surface_affine=files["surface_affine"],
+                  dseg_file=files["dseg_file"],
                   out_files=output_filenames,
                   output_labelmap=output_labelmap_file,
                   tau=parameters.get("tau", None),
@@ -228,5 +246,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

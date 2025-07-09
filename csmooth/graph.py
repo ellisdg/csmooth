@@ -174,7 +174,10 @@ def select_nodes(edge_src, edge_dst, edge_distances, labels, label, unique_nodes
     :param labels: numpy array of labels for each node
     :param label: label of the component to select
     :param unique_nodes: numpy array of unique nodes in the graph
-    :return:
+    :return edge_src: numpy array of source nodes for the selected component
+    :return edge_dst: numpy array of destination nodes for the selected component
+    :return edge_distances: numpy array of distances for the selected component
+    :return nodes: numpy array of nodes in the selected component
     """
     _nodes = unique_nodes[np.isin(labels, label)]
     _edge_mask = np.isin(edge_src, _nodes) & np.isin(edge_dst, _nodes)
