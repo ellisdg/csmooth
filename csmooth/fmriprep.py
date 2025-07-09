@@ -165,6 +165,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
 
     # TODO: add subject id to the output labelmap filename
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
+    output_removed_edges_filename = os.path.join(output_subject_dir, "anat", "removed_edges.nii.gz")
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
@@ -193,7 +194,8 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   tau=parameters.get("tau", None),
                   fwhm=parameters.get("fwhm", None),
                   mask_dilation=parameters.get("mask_dilation", None),
-                  resample_resolution=resample_resolution)
+                  resample_resolution=resample_resolution,
+                  output_removed_edges_filename=output_removed_edges_filename)
 
     logging.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 

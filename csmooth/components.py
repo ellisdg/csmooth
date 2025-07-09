@@ -110,7 +110,8 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                      n_components=5,
                      sampling_fraction=0.0001, min_samples=100,
                      qc_threshold=0.60,
-                     max_removal_attempts=250, node_counts_image_filename=None):
+                     max_removal_attempts=500,
+                     output_removed_edges_filename=None):
     """
     Check for bottlenecks in the graph defined by edges and distances.
     :param edge_src: numpy array of source nodes
@@ -127,6 +128,7 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
     :param qc_threshold: threshold for quality control, default is 0.9, which would indicate that at least 90% of the nodes
     in the component should come from the same dseg label.
     :param max_removal_attempts: maximum number of attempts to remove edges to disconnect the component.
+    :param output_removed_edges_filename: if provided, will save an image of the nodes of removed edges for the component.
     :return: edge_src_bottleneck, edge_dst_bottleneck, edge_distances_bottleneck:
              numpy arrays of edges and distances that are bottlenecks.
     """
@@ -142,7 +144,7 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
     # swap label 3 with label 0
     # 3 refers to CSF and 0 refers to background
     # so we will treat CSF as background
-    resampled_image_data[resampled_image_data == 3] = 0
+    # resampled_image_data[resampled_image_data == 3] = 0
 
     for label in sorted_labels[:n_components]:
         # select nodes that belong to the specified component
@@ -151,6 +153,11 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
 
         # count the number of nodes belonging to each dseg label
         node_labels, node_counts = np.unique(resampled_image_data[_nodes], return_counts=True)
+        # ignore counts from CSF as ventricles are included in the white matter component
+        if 3 in node_labels:
+            csf_index = np.where(node_labels == 3)[0][0]
+            node_labels = np.delete(node_labels, csf_index)
+            node_counts = np.delete(node_counts, csf_index)
         node_counts_normalized = node_counts / np.sum(node_counts)
         logging.debug(f"Label {label}: {node_labels}, counts: {node_counts}, normalized: {node_counts_normalized}")
 
@@ -252,7 +259,7 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                     node2 = np.squeeze(np.where(component_nodes == edge[1]))
                     label1 = component_labels[node1]
                     label2 = component_labels[node2]
-                    if label1 == label2:
+                    if label1.size == 1 and label2.size == 1 and np.all(label1 == label2):
                         logging.debug(f"Adding back edge {edge} with distance {removed_edge_distance:.2f}")
                         edge_src = np.append(edge_src, edge[0])
                         edge_dst = np.append(edge_dst, edge[1])
@@ -261,8 +268,8 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                         final_edges_removed.append(edge)
                 logging.info(f"Total edges removed after adding back in edges belonging to the same component: {final_edges_removed}")
 
-                if node_counts_image_filename is not None:
-                    logging.info(f"Saving image of nodes of removed edges for component {label} to {node_counts_image_filename}")
+                if output_removed_edges_filename is not None:
+                    logging.info(f"Saving image of nodes of removed edges for component {label} to {output_removed_edges_filename}")
                     # create an image of the node counts
                     node_counts_image_data = np.zeros(resampled_image_data.shape, dtype=np.uint32)
                     for edge in final_edges_removed:
@@ -270,7 +277,7 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                         node_counts_image_data[edge[1]] += 1
                     node_counts_image = nib.Nifti1Image(node_counts_image_data.reshape(resampled_image.shape),
                                                         resampled_image.affine)
-                    node_counts_image.to_filename(node_counts_image_filename)
+                    node_counts_image.to_filename(output_removed_edges_filename)
 
 
 

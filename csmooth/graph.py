@@ -16,6 +16,7 @@ def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
 
     # Create a mesh from the triangles
     mesh = trimesh.Trimesh(vertices=voxel_coords, faces=triangles)
+    trimesh.repair.fill_holes(mesh)
 
     # Check for intersections
     directions = edges_dst - edges_src

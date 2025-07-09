@@ -1,7 +1,6 @@
 import numpy as np
 import logging
 import time
-
 from csmooth.fwhm import estimate_fwhm
 from csmooth.heat import heat_kernel_smoothing
 

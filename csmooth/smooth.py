@@ -415,7 +415,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                   surface_affine=None, dseg_file=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
-                  estimate=True):
+                  estimate=True, output_removed_edges_filename=None):
     """
     Smooth an image using graph signal smoothing.
     :param in_files: Path to a Nifti files to be smoothed.
@@ -462,6 +462,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
         n_components=5,
         dseg_file=dseg_file,
         reference_image=reference_image,
+        output_removed_edges_filename=output_removed_edges_filename
     )
 
     if output_labelmap is not None:
@@ -572,7 +573,11 @@ def check_parameters(args, parser):
     if args.tau is not None and args.fwhm is not None:
         parser.error("Only one of --tau or --fwhm can be provided, not both.")
     if args.debug:
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(levelname)s:%(name)s:%(message)s')
+    else:
+        logging.basicConfig(level=logging.INFO,
+                            format='%(levelname)s:%(name)s:%(message)s')
 
 
 def main():
