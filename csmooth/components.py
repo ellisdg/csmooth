@@ -1,6 +1,7 @@
 import time
 import logging
 from collections import Counter
+import os
 
 import numpy as np
 import networkx as nx
@@ -32,7 +33,7 @@ def identify_connected_components(edge_src, edge_dst, edge_distances):
 
 
 def find_common_edges(edge_src, edge_dst, edge_distances, nodes, resampled_image_data, node_labels,
-                      node_counts, label,
+                      node_counts, component_i,
                       sampling_fraction, min_samples,
                       node_counts_image_data=None):
     # create an undirected networkx graph
@@ -58,7 +59,7 @@ def find_common_edges(edge_src, edge_dst, edge_distances, nodes, resampled_image
 
     if len(second_max_dseg_nodes) < min_samples:
         logging.warning(f"Not enough nodes in the second largest dseg label {second_max_dseg_label} "
-                        f"to sample {min_samples}. Exiting component {label} check.")
+                        f"to sample {min_samples}. Exiting component {component_i} check.")
         return None
 
     sampled_max_nodes = np.random.choice(max_dseg_nodes, size=int(len(max_dseg_nodes) * _sampling_fraction),
@@ -76,10 +77,10 @@ def find_common_edges(edge_src, edge_dst, edge_distances, nodes, resampled_image
             else:
                 edge = (shortest_path[k + 1], shortest_path[k])
             edge_counter[edge] += 1
-    logging.debug(f"Identified {len(edge_counter)} edges in the sampled paths for component {label}")
+    logging.debug(f"Identified {len(edge_counter)} edges in the sampled paths for component {component_i}")
 
     if node_counts_image_data is not None:
-        logging.info(f"Updating node counts image data for component {label}")
+        logging.info(f"Updating node counts image data for component {component_i}")
         for edge, count in edge_counter.items():
             node_counts_image_data[nodes[edge[0]]] += count
             node_counts_image_data[nodes[edge[1]]] += count
@@ -146,7 +147,7 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
     # so we will treat CSF as background
     # resampled_image_data[resampled_image_data == 3] = 0
 
-    for label in sorted_labels[:n_components]:
+    for i, label in enumerate(sorted_labels[:n_components]):
         # select nodes that belong to the specified component
         _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src, edge_dst, edge_distances, labels, label, unique_nodes)
@@ -159,18 +160,18 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
             node_labels = np.delete(node_labels, csf_index)
             node_counts = np.delete(node_counts, csf_index)
         node_counts_normalized = node_counts / np.sum(node_counts)
-        logging.debug(f"Label {label}: {node_labels}, counts: {node_counts}, normalized: {node_counts_normalized}")
+        logging.debug(f"Component {i}: {node_labels}, counts: {node_counts}, normalized: {node_counts_normalized}")
 
         # check if the component is large enough
         if np.max(node_counts_normalized) > qc_threshold:
-            logging.info(f"Component {label} is homogenous enough with "
+            logging.info(f"Component {i} is homogenous enough with "
                          f"{np.max(node_counts_normalized) * 100:.1f}% "
                          f"of nodes belonging to the same dseg label")
         else:
-            logging.warning(f"Component {label} is too heterogenous with only "
+            logging.warning(f"Component {i} is too heterogenous with only "
                             f"{np.max(node_counts_normalized) * 100:.1f}% "
                             f"of nodes belonging to the same dseg label")
-            logging.info(f"Attempting to identify errant edges in component {label} ")
+            logging.info(f"Attempting to identify errant edges in component {i} ")
 
             component_labels, sorted_component_labels, component_nodes = identify_connected_components(
                     edge_src=_edge_src,
@@ -188,12 +189,12 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                     resampled_image_data=resampled_image_data,
                     node_labels=node_labels,
                     node_counts=node_counts,
-                    label=label,
+                    component_i=i,
                     sampling_fraction=sampling_fraction,
                     min_samples=min_samples
                 )
                 if edge_counter is None or len(edge_counter) == 0:
-                    logging.warning(f"No edges found in component {label}. Skipping edge removal.")
+                    logging.warning(f"No edges found in component {i}. Skipping edge removal.")
                     continue
 
                 outliers = find_outliers(edge_counter)
@@ -241,18 +242,18 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
 
                 if len(edges_removed) >= max_removal_attempts:
                     logging.warning(f"Maximum number of removal attempts ({max_removal_attempts}) reached. "
-                                    f"Exiting component {label} check.")
+                                    f"Exiting component {i} check.")
                     break
                 else:
                     logging.info(f"Removed {len(edges_removed)} edges so far...")
 
-            logging.info(f"Removed {len(edges_removed)} edges to disconnect the component {label} into multiple components.")
+            logging.info(f"Removed {len(edges_removed)} edges to disconnect the component {i} into multiple components.")
             if n_components < 2:
-                logging.warning(f"Component {label} could not be disconnected into multiple components.")
+                logging.warning(f"Component {i} could not be disconnected into multiple components.")
             else:
                 # add back edges thar were removed but belong to the same final component
-                logging.info(f"Component {label} was successfully disconnected into {n_components} components.")
-                logging.info(f"Adding back edges that begin and terminate in the same final component {label}")
+                logging.info(f"Component {i} was successfully disconnected into {n_components} components.")
+                logging.info(f"Adding back edges that begin and terminate in the same final component {i}")
                 final_edges_removed = list()
                 for edge, removed_edge_distance in edges_removed:
                     node1 = np.squeeze(np.where(component_nodes == edge[0]))
@@ -269,15 +270,18 @@ def check_components(edge_src, edge_dst, edge_distances, labels, unique_nodes, s
                 logging.info(f"Total edges removed after adding back in edges belonging to the same component: {final_edges_removed}")
 
                 if output_removed_edges_filename is not None:
-                    logging.info(f"Saving image of nodes of removed edges for component {label} to {output_removed_edges_filename}")
+                    component_output_removed_edges_filename = output_removed_edges_filename.replace('.nii.gz', f'_component_{i}.nii.gz')
+                    logging.info(f"Saving image of nodes of removed edges for component {i} to "
+                                 f"{component_output_removed_edges_filename}")
                     # create an image of the node counts
-                    node_counts_image_data = np.zeros(resampled_image_data.shape, dtype=np.uint32)
+                    node_counts_image_data = np.zeros(resampled_image_data.shape, dtype=np.int32)
                     for edge in final_edges_removed:
                         node_counts_image_data[edge[0]] += 1
                         node_counts_image_data[edge[1]] += 1
                     node_counts_image = nib.Nifti1Image(node_counts_image_data.reshape(resampled_image.shape),
                                                         resampled_image.affine)
-                    node_counts_image.to_filename(output_removed_edges_filename)
+                    os.makedirs(os.path.dirname(component_output_removed_edges_filename), exist_ok=True)
+                    node_counts_image.to_filename(component_output_removed_edges_filename)
 
 
 

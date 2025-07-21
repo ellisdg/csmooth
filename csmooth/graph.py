@@ -1,27 +1,42 @@
+import time
 import logging
 import nibabel as nib
 import numpy as np
+import trimesh
 
 
-def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
+def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, quick=False):
     """
     Remove edges that intersect with the surface. Use trimesh to check for intersections.
-    :param edges_src: source nodes of the edges (numpy array)
-    :param edges_dst: destination nodes of the edges (numpy array)
-    :param voxel_coords: coordinates of the voxels (numpy array)
+    :param edges_src: source nodes of the edges (n, 3) numpy array. Each row is the (i, j, k) coordinate of a node.
+                      The nodes should be voxel coordinates in the same space as the vertex_coords.
+    :param edges_dst: destination nodes of the edges (n, 3) numpy array. Each row is the (i, j, k) coordinate of a node.
+                      The nodes should be voxel coordinates in the same space as the vertex_coords.
+    :param vertex_coords: coordinates of the surface vertices as a (n, 3) numpy array with (i, j, k) coordinates.
+                          The coordinates should be in the same space as the edges_src and edges_dst.
+    :param quick: if True, only check for ray intersections. If False, also check if the edge endpoints are inside the mesh.
+                  Sometimes the ray intersection check misses edges that start or end inside the mesh.
     :param triangles: triangles of the surface (numpy array)
     :return edges_src, edges_dst: the filtered edges
     """
-    import trimesh
+
+    start = time.time()
 
     # Create a mesh from the triangles
-    mesh = trimesh.Trimesh(vertices=voxel_coords, faces=triangles)
-    trimesh.repair.fill_holes(mesh)
+    mesh = trimesh.Trimesh(vertices=vertex_coords, faces=triangles)
+
+    # Fix potential issues with the mesh to ensure it is watertight
+    mesh.fill_holes()
+    mesh.process(validate=True)
+
 
     # Check for intersections
     directions = edges_dst - edges_src
     lengths = np.linalg.norm(directions, axis=1)
-    directions_normalized = directions / lengths[:, np.newaxis]
+    # Avoid division by zero for zero-length edges
+    directions_normalized = np.divide(directions, lengths[:, np.newaxis],
+                                      out=np.zeros_like(directions, dtype=float),
+                                      where=lengths[:, np.newaxis] != 0)
 
     intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
     locations, indices_ray, indices_triangle = intersector.intersects_location(
@@ -37,10 +52,35 @@ def remove_intersecting_edges(edges_src, edges_dst, voxel_coords, triangles):
 
     # Retain connections with lengths that are shorter than the distance to the surface intersection
     # (i.e. the edge does not intersect with the surface)
-    retained_mask[indices_ray] = edge_src_to_intersection > lengths[indices_ray]
+    # Add a small tolerance to handle floating point inaccuracies
+    retained_mask[indices_ray] =  (lengths[indices_ray] + 1e-6) < edge_src_to_intersection
+
+    if not quick:
+        inside_mesh_start = time.time()
+        logging.info("Performing additional checks for edges that start or end on opposite sides of the surface...")
+        # Use contains method which may be more robust for checking if points are inside a watertight mesh
+        # It uses a ray-based method to count intersections
+        all_nodes = np.concatenate((edges_src, edges_dst))
+        unique_nodes, unique_indices, unique_inverse = np.unique(all_nodes, axis=0, return_index=True, return_inverse=True)
+        contains_nodes = mesh.contains(unique_nodes)
+        contains_indices = unique_indices[contains_nodes]
+        all_nodes_mask = np.isin(unique_inverse, contains_indices)
+        contains_src_mask = all_nodes_mask[:len(edges_src)]
+        contains_dst_mask = all_nodes_mask[len(edges_src):]
+
+        # An edge crosses the surface if one endpoint is inside and the other is outside
+        # The retained mask should be true for edges that do NOT cross
+        # i.e., both endpoints are inside or both are outside
+        retained_mask_2 = (contains_src_mask == contains_dst_mask)
+        logging.info(f"Additional checks found another {retained_mask[~retained_mask_2].sum()} edges to remove")
+
+        retained_mask[~retained_mask_2] = False
+        logging.debug(f"Additional checks took {time.time() - inside_mesh_start:.2f} seconds")
+
     logging.info(f"Starting edges: {len(edges_src)}")
     logging.info(f"Retained edges: {retained_mask.sum()}")
     logging.info(f"Removed edges: {(~retained_mask).sum()}")
+    logging.debug(f"Edge intersection checks took {time.time() - start:.2f} seconds")
     return retained_mask
 
 

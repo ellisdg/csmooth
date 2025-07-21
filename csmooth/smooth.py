@@ -452,18 +452,18 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                                                       surface_affine=surface_affine)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
-    edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes = check_components(
-        edge_src=edge_src,
-        edge_dst=edge_dst,
-        edge_distances=edge_distances,
-        labels=labels,
-        unique_nodes=unique_nodes,
-        sorted_labels=sorted_labels,
-        n_components=5,
-        dseg_file=dseg_file,
-        reference_image=reference_image,
-        output_removed_edges_filename=output_removed_edges_filename
-    )
+    # edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes = check_components(
+    #     edge_src=edge_src,
+    #     edge_dst=edge_dst,
+    #     edge_distances=edge_distances,
+    #     labels=labels,
+    #     unique_nodes=unique_nodes,
+    #     sorted_labels=sorted_labels,
+    #     n_components=5,
+    #     dseg_file=dseg_file,
+    #     reference_image=reference_image,
+    #     output_removed_edges_filename=output_removed_edges_filename
+    # )
 
     if output_labelmap is not None:
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
