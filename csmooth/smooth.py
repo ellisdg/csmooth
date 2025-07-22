@@ -540,12 +540,12 @@ def add_parameter_args(parser):
                         help="Number of parallel processes to use for smoothing.")
     parser.add_argument("--overwrite", action='store_true',
                         help="If set, overwrite existing output files. Default is to not overwrite.")
-    parser.add_argument("--voxel_size", type=float, default=2.0,
+    parser.add_argument("--voxel_size", type=float, default=1.0,
                         help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
-                             "requirements and runtime. Default is 2.0 mm.")
+                             "requirements and runtime. Default is 1.0 mm.")
     parser.add_argument("--debug", action='store_true',
-                        help="If set, enable debug logger. Default is to use warning logger.")
+                        help="If set, enable debug logging. Default is to use info level logging.")
     return parser
 
 
