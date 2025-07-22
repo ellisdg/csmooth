@@ -1,4 +1,3 @@
-import logging
 import os
 import time
 import warnings
@@ -17,6 +16,7 @@ from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply
 from csmooth.graph import create_graph, select_nodes
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.optimization import find_optimal_tau
+from csmooth.utils import logger
 
 
 def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
@@ -72,7 +72,7 @@ def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, la
                                        n_jobs=n_jobs)
     smoothed_signal_data[_nodes, :] = _smoothed_data
     elapsed_time = time.time() - start_time
-    logging.debug(f"Smoothing component {label} with {len(_nodes)} nodes took {elapsed_time:.2f} seconds.")
+    logger.debug(f"Smoothing component {label} with {len(_nodes)} nodes took {elapsed_time:.2f} seconds.")
 
 
 def load_and_resample_image(in_file, resample_resolution):
@@ -252,8 +252,8 @@ def load_reference_image(reference_file, resample_resolution=None):
     """
     first_image = nib.load(reference_file)
     if resample_resolution is not None:
-        logging.debug("Resampling reference image from shape %s to resolution %s",
-                      first_image.shape, resample_resolution)
+        logger.debug(f"Resampling reference image from "
+                      f"resolution {first_image.header.get_zooms()[:3]} to resolution {resample_resolution}")
         _affine = adjust_affine_spacing(first_image.affine, np.asarray(resample_resolution))
         reference_data = resample_data_to_affine(first_image.get_fdata()[..., 0],
                                                  target_affine=_affine,
@@ -270,7 +270,7 @@ def load_reference_image(reference_file, resample_resolution=None):
 
 def write_image(image, out_file, target_image=None):
     if target_image is not None:
-        logging.debug("Resampling smoothed image from shape %s to %s",
+        logger.debug("Resampling smoothed image from shape %s to %s",
                       image.shape, target_image.shape)
         image = nilearn.image.resample_to_img(
             source_img=image,
@@ -280,7 +280,7 @@ def write_image(image, out_file, target_image=None):
             copy_header=True)
 
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    logging.info(f"Saving smoothed image to {out_file}")
+    logger.info(f"Saving smoothed image to {out_file}")
     image.to_filename(out_file)
 
 
@@ -449,7 +449,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
 
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
     edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files,
-                                                      surface_affine=surface_affine)
+                                                      surface_affine_file=surface_affine)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
     # edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes = check_components(
@@ -562,7 +562,7 @@ def add_parameter_args(parser):
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
                              "requirements and runtime. Default is 2.0 mm.")
     parser.add_argument("--debug", action='store_true',
-                        help="If set, enable debug logging. Default is to use warning logging.")
+                        help="If set, enable debug logger. Default is to use warning logger.")
     return parser
 
 
@@ -573,12 +573,9 @@ def check_parameters(args, parser):
     if args.tau is not None and args.fwhm is not None:
         parser.error("Only one of --tau or --fwhm can be provided, not both.")
     if args.debug:
-        logging.basicConfig(level=logging.DEBUG,
-                            format='%(levelname)s:%(name)s:%(message)s')
+        logger.setLevel("DEBUG")
     else:
-        logging.basicConfig(level=logging.INFO,
-                            format='%(levelname)s:%(name)s:%(message)s')
-
+        logger.setLevel("INFO")
 
 def main():
     args = parse_args()
@@ -611,7 +608,7 @@ def main():
                  output_labelmap=output_labelmap,
                  resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size), )
 
-    logging.info("Smoothing complete.")
+    logger.info("Smoothing complete.")
 
 
 if __name__ == "__main__":

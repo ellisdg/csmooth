@@ -1,8 +1,8 @@
 import numpy as np
-import logging
 import time
 from csmooth.fwhm import estimate_fwhm
 from csmooth.heat import heat_kernel_smoothing
+from csmooth.utils import logger
 
 
 def graph_smoothing_with_gradient_descent(data, edge_src, edge_dst, edge_distances, fwhm,
@@ -59,11 +59,11 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
                                                edge_dst=edge_dst, edge_distances=edge_distances)
         current_fwhm = estimate_fwhm(edge_src=edge_src, edge_dst=edge_dst,
                                      edge_distances=edge_distances, signal_data=smoothed_noise)
-        logging.debug(f"Iteration {i}: current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f} tau: {tau:.2f}")
+        logger.debug(f"Iteration {i}: current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f} tau: {tau:.2f}")
         previous_mae = mae
         mae = np.abs(current_fwhm - fwhm)
         if mae > previous_mae:
-            logging.warning(f"MAE increased from {previous_mae:.4f} to {mae:.4f}. "
+            logger.warning(f"MAE increased from {previous_mae:.4f} to {mae:.4f}. "
                             f"Retrying with half the learning rate.")
             tau = find_optimal_tau(fwhm=fwhm, edge_src=edge_src, edge_dst=edge_dst,
                                    edge_distances=edge_distances, shape=shape, initial_tau=previous_tau,
@@ -74,7 +74,7 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
         if mae < stop_threshold:
             break
         if i == max_iterations - 1:
-            logging.warning(f"Maximum iterations reached ({max_iterations}). "
+            logger.warning(f"Maximum iterations reached ({max_iterations}). "
                             f"Current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f}, "
                             f"tau: {tau:.2f}.")
             break
@@ -90,8 +90,8 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
 
     end_time = time.time()
     if log_time:
-        logging.info(f"Gradient descent completed in {i + 1} iterations.")
-        logging.info(f"Final tau: {tau:.2f}, "
+        logger.info(f"Gradient descent completed in {i + 1} iterations.")
+        logger.info(f"Final tau: {tau:.2f}, "
                      f"achieved fwhm: {current_fwhm:.2f}, "
                      f"target fwhm: {fwhm:.2f}, "
                      f"time taken: {(end_time - start_time) / 60:.2f} minutes")

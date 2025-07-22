@@ -1,10 +1,10 @@
 import time
-import logging
 import numpy as np
 import networkx as nx
 import nx_parallel as nxp
 
 from csmooth.matrix import create_adjacency_matrix
+from csmooth.utils import logger
 
 
 def networkx_graph_distances(edge_src, edge_dst, edge_distances, cutoff=None):
@@ -56,13 +56,13 @@ def compute_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm):
     # don't worry about nodes that are more than 3 times sigma away from the source node
     cutoff = (fwhm / np.sqrt(8 * np.log(2))) * 3
 
-    logging.info("Computing Gaussian weights...")
+    logger.info("Computing Gaussian weights...")
     start = time.time()
     edge_src, edge_dst, edge_weights = networkx_gaussian_kernels(edge_src, edge_dst, edge_distances, fwhm,
                                                                  cutoff=cutoff)
     end = time.time()
     run_time = (end - start) / 60
-    logging.info(f"Time taken to compute Gaussian weights: {run_time:.2f} minutes")
+    logger.info(f"Time taken to compute Gaussian weights: {run_time:.2f} minutes")
     return edge_src, edge_dst, edge_weights
 
 
@@ -94,7 +94,7 @@ def apply_gaussian_smoothing(data, edge_src, edge_dst, edge_weights):
     :param edge_weights:
     :return:
     """
-    logging.info("Applying Gaussian smoothing...")
+    logger.info("Applying Gaussian smoothing...")
     start = time.time()
 
     adjacency_matrix, unique_nodes = create_adjacency_matrix(edge_src=edge_src, edge_dst=edge_dst, weights=edge_weights)
@@ -104,5 +104,5 @@ def apply_gaussian_smoothing(data, edge_src, edge_dst, edge_weights):
 
     end = time.time()
     run_time = (end - start) / 60
-    logging.info(f"Time taken to apply Gaussian smoothing: {run_time:.2f} minutes")
+    logger.info(f"Time taken to apply Gaussian smoothing: {run_time:.2f} minutes")
     return smoothed_data.squeeze()

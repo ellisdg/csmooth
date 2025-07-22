@@ -1,11 +1,11 @@
 import glob
 import os
-import logging
 
 
 import networkx as nx
 
 from csmooth.smooth import add_parameter_args, check_parameters, smooth_images
+from csmooth.utils import logger
 
 
 def find_surface_files(fmriprep_subject_dir):
@@ -39,8 +39,7 @@ def find_bold_files(fmriprep_subject_dir):
     if not bold_files:
         raise FileNotFoundError(f"No BOLD files found in {fmriprep_subject_dir}/func")
 
-    logging.log(level=logging.INFO,
-                msg=f"Found {len(bold_files)} BOLD files in {fmriprep_subject_dir}/func: {bold_files}")
+    logger.info(f"Found {len(bold_files)} BOLD files in {fmriprep_subject_dir}/func: {bold_files}")
 
     return bold_files
 
@@ -160,8 +159,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     """
     files = find_fmriprep_files(fmriprep_subject_dir)
 
-    logging.log(level=logging.INFO,
-                msg=f"Processing fMRIPrep subject directory: {fmriprep_subject_dir}")
+    logger.info(f"Processing fMRIPrep subject directory: {fmriprep_subject_dir}")
 
     # TODO: add subject id to the output labelmap filename
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
@@ -171,11 +169,11 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                                                fwhm=parameters.get("fwhm", None))
     for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
         if not parameters["overwrite"] and os.path.exists(output_filename):
-            logging.warning(f"Output file already exists, skipping: {output_filename}")
+            logger.warning(f"Output file already exists, skipping: {output_filename}")
             files["bold_files"].remove(input_filename)
             output_filenames.remove(output_filename)
     if not files["bold_files"]:
-        logging.info(f"All output files already exist in {output_subject_dir}, skipping processing.")
+        logger.info(f"All output files already exist in {output_subject_dir}, skipping processing.")
         return
     kernel_basename = os.path.join(output_subject_dir,
                                    "cache",
@@ -197,7 +195,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   resample_resolution=resample_resolution,
                   output_removed_edges_filename=output_removed_edges_filename)
 
-    logging.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
+    logger.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 
 
 def parse_args():
@@ -231,7 +229,7 @@ def main():
         for fmriprep_subject_dir in subject_dirs:
             if not os.path.isdir(fmriprep_subject_dir):
                 continue
-            logging.info(f"Processing subject directory: {fmriprep_subject_dir}")
+            logger.info(f"Processing subject directory: {fmriprep_subject_dir}")
             output_subject_dir = os.path.join(output_dir, os.path.basename(fmriprep_subject_dir))
             os.makedirs(output_subject_dir, exist_ok=True)
             process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, kwargs)

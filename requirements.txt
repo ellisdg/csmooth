@@ -9,3 +9,4 @@ pygsp
 trimesh
 embreex
 xxhash
+nitransforms
