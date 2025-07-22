@@ -10,7 +10,6 @@ import scipy
 from tqdm import tqdm
 
 from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
-from csmooth.components import check_components
 from csmooth.components import identify_connected_components
 from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
 from csmooth.graph import create_graph, select_nodes
@@ -412,10 +411,9 @@ def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_r
 
 
 def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
-                  surface_affine=None, dseg_file=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
-                  estimate=True, output_removed_edges_filename=None):
+                  estimate=True):
     """
     Smooth an image using graph signal smoothing.
     :param in_files: Path to a Nifti files to be smoothed.
@@ -425,8 +423,6 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     :param surface_files: List of surface filenames to use for edge pruning.
     :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
     :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
-    :param surface_affine: Optional affine matrix to apply to the surface coordinates to align them to the image space.
-    :param dseg_file: Optional dseg file to use for indentifying and correcting components.
     :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
     :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
     Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
@@ -448,22 +444,9 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     # reference image and resampled reference are the same if resampling is done, otherwise the resampled reference is None.
 
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
-    edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files,
-                                                      surface_affine_file=surface_affine)
+    edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files)
 
     labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
-    # edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes = check_components(
-    #     edge_src=edge_src,
-    #     edge_dst=edge_dst,
-    #     edge_distances=edge_distances,
-    #     labels=labels,
-    #     unique_nodes=unique_nodes,
-    #     sorted_labels=sorted_labels,
-    #     n_components=5,
-    #     dseg_file=dseg_file,
-    #     reference_image=reference_image,
-    #     output_removed_edges_filename=output_removed_edges_filename
-    # )
 
     if output_labelmap is not None:
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,

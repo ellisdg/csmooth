@@ -63,37 +63,6 @@ def find_mask_file(fmriprep_subject_dir):
     return mask_files[0]  # Return the single mask file found
 
 
-def find_surface_affine(fmriprep_subject_dir):
-    """
-    Find the affine matrix file to transform surface files to T1w space.
-    :param fmriprep_subject_dir: Directory containing fmriprep outputs for a subject
-    :return: Affine matrix file in ITK format
-    """
-    affine_file = os.path.join(fmriprep_subject_dir, "anat", "*_from-fsnative_to-T1w_mode-image_xfm.txt")
-    affine_files = glob.glob(affine_file)
-
-    if not affine_files:
-        raise FileNotFoundError(f"No affine file found in {fmriprep_subject_dir}/anat")
-
-    if len(affine_files) > 1:
-        raise ValueError(f"Expected exactly one affine file, found {len(affine_files)}: {affine_files}")
-
-    return affine_files[0]  # Return the single affine file found
-
-
-def find_dseg_file(fmriprep_subject_dir):
-    """
-    Find the dseg file in the fmriprep subject directory.
-    """
-    dseg_files = glob.glob(os.path.join(fmriprep_subject_dir, "**", "anat", "*_dseg.nii.gz"), recursive=True)
-    dseg_files = [f for f in dseg_files if "space-MNI" not in f]
-    if not dseg_files:
-        raise FileNotFoundError(f"No dseg file found in {fmriprep_subject_dir}/anat")
-    if len(dseg_files) > 1:
-        raise ValueError(f"Expected exactly one dseg file, found {len(dseg_files)}: {dseg_files}")
-    return dseg_files[0]
-
-
 def find_fmriprep_files(fmriprep_subject_dir):
     """
     Find all necessary fMRIPrep files for a subject.
@@ -106,15 +75,11 @@ def find_fmriprep_files(fmriprep_subject_dir):
     surface_files = find_surface_files(fmriprep_subject_dir)
     bold_files = find_bold_files(fmriprep_subject_dir)
     mask_file = find_mask_file(fmriprep_subject_dir)
-    surface_affine = find_surface_affine(fmriprep_subject_dir)
-    dseg_file = find_dseg_file(fmriprep_subject_dir)
 
     return {
         "surface_files": surface_files,
         "bold_files": bold_files,
-        "mask_file": mask_file,
-        "surface_affine": surface_affine,
-        "dseg_file": dseg_file
+        "mask_file": mask_file
     }
 
 
@@ -163,7 +128,6 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
 
     # TODO: add subject id to the output labelmap filename
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
-    output_removed_edges_filename = os.path.join(output_subject_dir, "anat", "removed_edges.nii.gz")
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
@@ -185,15 +149,12 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   surface_files=files["surface_files"],
                   mask_file=files["mask_file"],
                   out_kernel_basename=kernel_basename,
-                  surface_affine=files["surface_affine"],
-                  dseg_file=files["dseg_file"],
                   out_files=output_filenames,
                   output_labelmap=output_labelmap_file,
                   tau=parameters.get("tau", None),
                   fwhm=parameters.get("fwhm", None),
                   mask_dilation=parameters.get("mask_dilation", None),
-                  resample_resolution=resample_resolution,
-                  output_removed_edges_filename=output_removed_edges_filename)
+                  resample_resolution=resample_resolution)
 
     logger.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 
