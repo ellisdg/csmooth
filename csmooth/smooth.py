@@ -158,7 +158,7 @@ def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_l
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
     edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files)
 
-    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
+    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
 
     if output_labelmap is not None:
         save_labelmap(output_labelmap, shape, affine, labels, sorted_labels, unique_nodes)
@@ -446,7 +446,7 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     mask_array = process_mask(mask_file, reference_image, mask_dilation)
     edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files)
 
-    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst, edge_distances)
+    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
 
     if output_labelmap is not None:
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,

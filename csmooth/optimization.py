@@ -90,7 +90,9 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
 
     end_time = time.time()
     if log_time:
+        # TODO: fix logging the number of iterations when recursion happens. Right now it logs the iterations from the last recursion
         logger.info(f"Gradient descent completed in {i + 1} iterations.")
+        # TODO: fix current_fwhm when recursion happens. Right now it logs the fwhm from the last iteration of the last recursion
         logger.info(f"Final tau: {tau:.2f}, "
                      f"achieved fwhm: {current_fwhm:.2f}, "
                      f"target fwhm: {fwhm:.2f}, "

@@ -2,47 +2,19 @@ import time
 import nibabel as nib
 import numpy as np
 import trimesh
+from tqdm import tqdm
+
 from csmooth.utils import logger
+from csmooth.components import number_of_connected_components
 
 
-def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, tolerance=1e-2):
-    """
-    Remove edges that intersect with the surface. Use trimesh to check for intersections.
-    :param edges_src: source nodes of the edges (n, 3) numpy array. Each row is the (i, j, k) coordinate of a node.
-                      The nodes should be voxel coordinates in the same space as the vertex_coords.
-    :param edges_dst: destination nodes of the edges (n, 3) numpy array. Each row is the (i, j, k) coordinate of a node.
-                      The nodes should be voxel coordinates in the same space as the vertex_coords.
-    :param vertex_coords: coordinates of the surface vertices as a (n, 3) numpy array with (i, j, k) coordinates.
-                          The coordinates should be in the same space as the edges_src and edges_dst.
-    :param triangles: triangles of the surface (numpy array)
-    :param tolerance: tolerance for intersection check. Default is 1e-2 mm. This is added to the length of the edge
-                     when checking for intersections. This is added to fix errors potentially caused by floating point
-                     inaccuracies. Lowering this value may result in less edges being removed, but may also result in
-                     components not being disconnected properly.
-
-    :return edges_src, edges_dst: the filtered edges
-    """
-    # TODO: adjust tolerance based on whether the number of connected components from al lthe surfaces is as expected
-
-    logger.info("Checking for edges intersecting with the surface...")
-
-    start = time.time()
-
+def compute_distance_to_surface(edges_src, directions_normalized, coordinates, triangles):
     # Create a mesh from the triangles
-    mesh = trimesh.Trimesh(vertices=vertex_coords, faces=triangles)
+    mesh = trimesh.Trimesh(vertices=coordinates, faces=triangles)
 
     # Fix potential issues with the mesh to ensure it is watertight
     mesh.fill_holes()
     mesh.process(validate=True)
-
-
-    # Check for intersections
-    directions = edges_dst - edges_src
-    lengths = np.linalg.norm(directions, axis=1)
-    # Avoid division by zero for zero-length edges
-    directions_normalized = np.divide(directions, lengths[:, np.newaxis],
-                                      out=np.zeros_like(directions, dtype=float),
-                                      where=lengths[:, np.newaxis] != 0)
 
     intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
     locations, indices_ray, indices_triangle = intersector.intersects_location(
@@ -52,14 +24,105 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, to
     )
 
     # compute the distances between edges_src and the intersection points
-    edge_src_to_intersection = np.linalg.norm(edges_src[indices_ray] - locations, axis=1)
+    return np.linalg.norm(edges_src[indices_ray] - locations, axis=1), indices_ray
+
+
+def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, edge_src_indices, edge_dst_indices,
+                              min_tolerance=1e-6, max_tolerance=1e-2):
+    """
+    Remove edges that intersect with the surface. Use trimesh to check for intersections.
+    :param edges_src: source nodes of the edges (n, 3) numpy array. Each row is the (x, y, z) coordinate of a node.
+                      The nodes should be voxel coordinates in the same space as the vertex_coords.
+    :param edges_dst: destination nodes of the edges (n, 3) numpy array. Each row is the (x, y, z) coordinate of a node.
+                      The nodes should be voxel coordinates in the same space as the vertex_coords.
+    :param vertex_coords: a list of coordinates of the surface vertices as multiple (n, 3) numpy arrays
+                          with (x, y, z) coordinates.
+                          The coordinates should be in the same space as the edges_src and edges_dst.
+    :param triangles: A list of triangles as multiple (m, 3) numpy arrays with indices into the vertex_coords.
+    :param edge_src_indices: indices of the source nodes of the edges in the original graph.
+    :param edge_dst_indices: indices of the destination nodes of the edges in the original graph.
+    :param tolerance: tolerance for intersection check. Default is 1e-2 mm. This is added to the length of the edge
+                     when checking for intersections. This is added to fix errors potentially caused by floating point
+                     inaccuracies. Lowering this value may result in less edges being removed, but may also result in
+                     components not being disconnected properly.
+
+    :return edges_src, edges_dst: the filtered edges
+    """
+
+    logger.info("Checking for edges intersecting with the surfaces...")
+
+    start = time.time()
+
+    # Check for intersections
+    directions = edges_dst - edges_src
+    lengths = np.linalg.norm(directions, axis=1)
+
+    # Avoid division by zero for zero-length edges
+    directions_normalized = np.divide(directions, lengths[:, np.newaxis],
+                                      out=np.zeros_like(directions, dtype=float),
+                                      where=lengths[:, np.newaxis] != 0)
+
     retained_mask = np.ones(len(edges_src), dtype=bool)
 
+    n_components = number_of_connected_components(edge_src=edge_src_indices,
+                                                  edge_dst=edge_dst_indices)
 
-    # Retain connections with lengths that are shorter than the distance to the surface intersection
-    # (i.e. the edge does not intersect with the surface)
-    # Add a small tolerance to handle floating point inaccuracies
-    retained_mask[indices_ray] = (lengths[indices_ray] + tolerance) < edge_src_to_intersection
+    for coo, tri in tqdm(zip(vertex_coords, triangles),
+                         total=len(vertex_coords),
+                         unit="surface",
+                         desc="Removing intersecting edges"):
+        # TODO: adjust tolerance based on whether the number of connected components from all the surfaces is as expected
+
+        edge_src_to_intersection, indices_ray = compute_distance_to_surface(edges_src[retained_mask],
+                                                                            directions_normalized[retained_mask],
+                                                                            coo, tri)
+
+        # Retain connections with lengths that are shorter than the distance to the surface intersection
+        # (i.e. the edge does not intersect with the surface)
+        # Add a small tolerance to handle floating point inaccuracies
+
+        for tolerance in np.linspace(min_tolerance, max_tolerance, 10):
+            tmp_retained_mask = retained_mask.copy()
+            _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
+            true_indices = np.flatnonzero(tmp_retained_mask)
+            tmp_retained_mask[true_indices[indices_ray]] = _retained_mask
+            new_n_components = number_of_connected_components(edge_src=edge_src_indices[tmp_retained_mask],
+                                                              edge_dst=edge_dst_indices[tmp_retained_mask])
+            if new_n_components > n_components:
+                logger.debug(f"Increased number of connected components from {n_components} to {new_n_components} " 
+                             f"by using a tolerance of {tolerance:.1e} mm")
+                n_components = new_n_components
+                retained_mask = tmp_retained_mask
+                break
+            elif tolerance == max_tolerance:
+                removed_edges_before_shift = (~tmp_retained_mask).sum()
+                # try shifting the directions slightly and see if that helps
+                logger.debug(f"Could not increase the number of connected components from {n_components} "
+                             f"to {n_components + 1} using tolerance up to {max_tolerance:.1e} mm. "
+                             f"Trying to shift the ray directions slightly to avoid potential floating point inaccuracies.")
+                shift = np.asarray([1e-8, 1e-8, 1e-8])
+                edge_src_to_intersection, indices_ray = compute_distance_to_surface(edges_src[tmp_retained_mask],
+                                                                                    directions_normalized[tmp_retained_mask] + shift,
+                                                                                    coo, tri)
+                _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
+                true_indices = np.flatnonzero(tmp_retained_mask)
+                tmp_retained_mask[true_indices[indices_ray]] = _retained_mask
+                new_n_components = number_of_connected_components(edge_src=edge_src_indices[tmp_retained_mask],
+                                                                  edge_dst=edge_dst_indices[tmp_retained_mask])
+                removed_edges_after_shift = (~tmp_retained_mask).sum()
+
+                if new_n_components > n_components:
+                    logger.debug(f"Increased number of connected components from {n_components} to {new_n_components} " 
+                                 f"by using a tolerance of {tolerance:.1e} mm and shifting the ray directions slightly.")
+                    logger.debug(f"Removed an additional {removed_edges_after_shift - removed_edges_before_shift} edges "
+                                    f"by shifting the ray directions slightly.")
+                    n_components = new_n_components
+                    retained_mask = tmp_retained_mask
+                    break
+                else:
+                    raise ValueError(f"Could not increase the number of connected components from {n_components} "
+                                     f"to {n_components + 1}. Even after trying to shift the ray directions slightly. "
+                                     f"Check the input surfaces for errors or try increasing the max_tolerance.")
 
     logger.info(f"Starting edges: {len(edges_src)}")
     logger.info(f"Retained edges: {retained_mask.sum()}")
@@ -68,16 +131,18 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, to
     return retained_mask
 
 
-def remove_edges_intersecting_surface_files(edges_src, edges_dst, surface_filenames):
+def remove_edges_intersecting_surface_files(edges_src, edges_dst, surface_filenames, edge_src_indices, edge_dst_indices):
     logger.info("Removing edges intersecting with surfaces")
-    edge_mask = np.ones(len(edges_src), dtype=bool)
+    all_coords, all_triangles = list(), list()
 
     for surface_filename in surface_filenames:
         logger.info(f"Loading surface: {surface_filename}")
         surface = nib.load(surface_filename)
         coords, triangles = surface.agg_data()
-        _edge_mask = remove_intersecting_edges(edges_src[edge_mask], edges_dst[edge_mask], coords, triangles)
-        edge_mask[edge_mask] = _edge_mask
+        all_coords.append(coords)
+        all_triangles.append(triangles)
+    edge_mask = remove_intersecting_edges(edges_src, edges_dst, all_coords, all_triangles,
+                                          edge_src_indices, edge_dst_indices)
     return edge_mask
 
 
@@ -182,7 +247,9 @@ def create_graph(mask_array, image_affine, surface_files):
 
     edge_mask = remove_edges_intersecting_surface_files(edge_src_xyz[..., :3],
                                                         edge_dst_xyz[..., :3],
-                                                        surface_files)
+                                                        surface_files,
+                                                        edge_src_indices=edge_src,
+                                                        edge_dst_indices=edge_dst)
 
     edge_src = edge_src[edge_mask]
     edge_dst = edge_dst[edge_mask]
