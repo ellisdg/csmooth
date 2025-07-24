@@ -67,6 +67,10 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, ed
     n_components = number_of_connected_components(edge_src=edge_src_indices,
                                                   edge_dst=edge_dst_indices)
 
+    # TODO: it might be possible to look at whether removing complementary edges fixes errors
+    #       because I think for every src dst edge, there is a dst src edge. So if one of them intersects
+    #       with the surface, we can remove both edges.
+
     for coo, tri in tqdm(zip(vertex_coords, triangles),
                          total=len(vertex_coords),
                          unit="surface",
