@@ -9,7 +9,7 @@ import numpy as np
 import scipy
 from tqdm import tqdm
 
-from csmooth.affine import adjust_affine_spacing, resample_data_to_shape, resample_data_to_affine
+from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 from csmooth.components import identify_connected_components
 from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
 from csmooth.graph import create_graph, select_nodes
@@ -40,8 +40,7 @@ def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
                                            edge_src=edge_src,
                                            edge_dst=edge_dst,
                                            edge_distances=edge_distances,
-                                           fwhm=fwhm,
-                                           n_jobs=n_jobs)
+                                           fwhm=fwhm)
     elif tau is not None:
         smoothed_data = heat_kernel_smoothing(edge_src=edge_src,
                                               edge_dst=edge_dst,
@@ -54,7 +53,7 @@ def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
 
 
 def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
-                     smoothed_signal_data, tau=None, fwhm=None, n_jobs=4):
+                     tau=None, fwhm=None, n_jobs=4, low_memory=False):
     start_time = time.time()
     _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
                                                                  edge_dst=edge_dst,
@@ -62,35 +61,26 @@ def smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, la
                                                                  labels=labels,
                                                                  label=label,
                                                                  unique_nodes=unique_nodes)
-    _smoothed_data = _smooth_component(edge_src=_edge_src,
-                                       edge_dst=_edge_dst,
-                                       edge_distances=_edge_distances,
-                                       signal_data=signal_data[_nodes, :],
-                                       tau=tau,
-                                       fwhm=fwhm,
-                                       n_jobs=n_jobs)
-    smoothed_signal_data[_nodes, :] = _smoothed_data
+    if low_memory:
+        # if low memory mode is enabled, smooth each timepoint separately
+        for t in range(signal_data.shape[1]):
+            signal_data[_nodes, t] = _smooth_component(edge_src=_edge_src,
+                                                     edge_dst=_edge_dst,
+                                                     edge_distances=_edge_distances,
+                                                     signal_data=signal_data[_nodes, t],
+                                                     tau=tau,
+                                                     fwhm=fwhm,
+                                                     n_jobs=n_jobs)
+    else:
+        signal_data[_nodes, :] = _smooth_component(edge_src=_edge_src,
+                                           edge_dst=_edge_dst,
+                                           edge_distances=_edge_distances,
+                                           signal_data=signal_data[_nodes, :],
+                                           tau=tau,
+                                           fwhm=fwhm,
+                                           n_jobs=n_jobs)
     elapsed_time = time.time() - start_time
     logger.debug(f"Smoothing component {label} with {len(_nodes)} nodes took {elapsed_time:.2f} seconds.")
-
-
-def load_and_resample_image(in_file, resample_resolution):
-    reference_image = nib.load(in_file)
-    original_shape = reference_image.shape[:3]
-    original_affine = reference_image.affine
-
-    if resample_resolution is not None:
-        affine = adjust_affine_spacing(reference_image.affine, np.asarray(resample_resolution))
-        reference_data = resample_data_to_affine(reference_image.get_fdata()[..., 0],
-                                                 target_affine=affine,
-                                                 original_affine=reference_image.affine)
-        shape = reference_data.shape[:3]
-        reference_image = nib.Nifti1Image(reference_data, affine)
-    else:
-        affine = original_affine
-        shape = original_shape
-
-    return reference_image, affine, shape, original_shape, original_affine
 
 
 def process_mask(mask_file, reference_image, mask_dilation):
@@ -122,65 +112,16 @@ def save_labelmap(output_labelmap, shape, affine, labels, sorted_labels, unique_
     labelmap_image.to_filename(output_labelmap)
 
 
-def smooth_components(edge_src, edge_dst, edge_distances, signal_data, labels, sorted_labels, unique_nodes, tau, fwhm,
-                      n_jobs=4):
-    smoothed_signal_data = signal_data.copy()
-    for label in tqdm(sorted_labels, desc="Smoothing components", unit="component"):
-        smooth_component(edge_src, edge_dst, edge_distances, signal_data, labels, label, unique_nodes,
-                         smoothed_signal_data, tau=tau, fwhm=fwhm, n_jobs=n_jobs)
-    return smoothed_signal_data
-
-
-def smooth_image(in_file, out_file, surface_files, tau=None, fwhm=None, output_labelmap=None,
-                 resample_resolution=None, mask_file=None, mask_dilation=3):
+def smooth_image(in_file, out_file, surface_files, **kwargs):
     """
-    Smooth an image using graph signal smoothing.
+    Smooth an image using graph signal smoothing. This function simply calls smooth_images with a single image.
     :param in_file: Path to a Nifti file to be smoothed.
     :param out_file: Output filename to save the smoothed image.
     :param surface_files: List of surface filenames to use for edge pruning.
-    :param tau: Value of tau to use for graph signal smoothing. Either tau or fwhm must be provided.
-    :param fwhm: Value of FWHM to use for Gaussian smoothing. Either tau or fwhm must be provided.
-    :param output_labelmap: Optional output labelmap filename to save the individual components that were smoothed. To disable, set to None.
-    :param resample_resolution: Optional (x, y, z) resolution to resample the image to. If None, no resampling is done.
-    Otherwise, the image is resampled to the specified resolution prior to formation of the graph and smoothing. After
-    smoothing, the image is resampled back to the original resolution.
-    :param mask_file: Optional filename of a mask to use for smoothing. This can speed up processing and reduce
-     computational requirements, If None, no mask is used.
-    :param mask_dilation: Optional number of voxels to dilate the mask by. This can help to include more voxels in the
-        smoothing process. If None, no dilation is done. Mask dilation is done in the resampled image space. If no
-        signal image resampling is done, the mask is dilated in the signal image space (not the mask image space).
-        If no mask filename is provided, this parameter is ignored.
+    :param kwargs: Additional parameters to pass to smooth_images.
     :return:
     """
-
-    reference_image, affine, shape, original_shape, original_affine = load_and_resample_image(in_file,
-                                                                                              resample_resolution)
-    mask_array = process_mask(mask_file, reference_image, mask_dilation)
-    edge_src, edge_dst, edge_distances = create_graph(mask_array, affine, surface_files)
-
-    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
-
-    if output_labelmap is not None:
-        save_labelmap(output_labelmap, shape, affine, labels, sorted_labels, unique_nodes)
-
-    signal_image = nib.load(in_file)
-    signal_data = signal_image.get_fdata()
-    if signal_data.ndim == 3:
-        signal_data = signal_data[..., None]
-
-    if resample_resolution is not None:
-        signal_data = resample_data_to_shape(signal_data, shape)
-
-    signal_data = signal_data.reshape(-1, signal_data.shape[-1])
-    smoothed_signal_data = smooth_components(edge_src, edge_dst, edge_distances, signal_data, labels, sorted_labels,
-                                             unique_nodes, tau, fwhm)
-
-    if resample_resolution is not None:
-        smoothed_signal_data = resample_data_to_shape(smoothed_signal_data, original_shape)
-    smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(original_shape + (-1,)), signal_image.affine)
-
-    os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    smoothed_image.to_filename(out_file)
+    smooth_images([in_file], [out_file], surface_files, **kwargs)
 
 
 def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes,
@@ -284,7 +225,7 @@ def write_image(image, out_file, target_image=None):
 
 
 def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, edge_distances, labels, sorted_labels,
-                                       unique_nodes, fwhm, resampled_reference=None):
+                                       unique_nodes, fwhm, resampled_reference=None, low_memory=False):
     """
     Apply estimated Gaussian smoothing to a list of images based on the provided graph structure.
     Finds the optimal tau for each of the five largest components in the graph (background, wm left/right, gm left/right).
@@ -299,6 +240,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
     :param unique_nodes: Unique nodes in the graph.
     :param fwhm: Target full width at half maximum in mm for smoothing.
     :param resampled_reference: Optional reference image to resample the smoothed images to.
+    :param low_memory: If True, use low memory mode. This will reduce memory usage but may increase runtime.
     :return: None
     """
     # Estimate optimal tau for each component to achieve the target fwhm
@@ -336,7 +278,6 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
         _shape = signal_data.shape
 
         signal_data = signal_data.reshape(-1, signal_data.shape[-1])
-        smoothed_signal_data = signal_data.copy()
         # smooth the background data with the mean estimated tau
         smooth_component(
             edge_src=edge_src,
@@ -346,8 +287,8 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
             labels=labels,
             label=sorted_labels[5:],  # smooth the rest of the components with the mean tau
             unique_nodes=unique_nodes,
-            smoothed_signal_data=smoothed_signal_data,
-            tau=np.mean(taus)  # Use the mean tau for all components
+            tau=np.mean(taus),  # Use the mean tau for all components
+            low_memory=low_memory
         )
         # smooth each main component with the estimated tau
         for label, _tau in zip(main_labels, taus):
@@ -358,10 +299,10 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
                              labels=labels,
                              label=label,
                              unique_nodes=unique_nodes,
-                             smoothed_signal_data=smoothed_signal_data,
-                             tau=_tau)
+                             tau=_tau,
+                             low_memory=low_memory)
 
-        smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
+        smoothed_image = nib.Nifti1Image(signal_data.reshape(_shape),
                                          affine=signal_image.affine)
 
         write_image(image=smoothed_image,
@@ -413,7 +354,7 @@ def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_r
 def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
-                  estimate=True):
+                  estimate=True, low_memory=False):
     """
     Smooth an image using graph signal smoothing.
     :param in_files: Path to a Nifti files to be smoothed.
@@ -436,6 +377,10 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     :param estimate: If True, estimate the optimal tau for each component to achieve the target fwhm. This is
     much faster than computing the Gaussian kernels but may result in slightly different smoothing. If False,
     precompute the Gaussian kernels for each component and save to file which could take a very long time.
+    :param low_memory: If True, use low memory mode. This will reduce memory usage but may increase runtime.
+    Memory usage is reduced by smoothing each timepoint separately instead of all at once. This is useful for large
+    images with many timepoints. If False, all timepoints are smoothed at once which is faster but requires more memory.
+    :raises ValueError: If both tau and fwhm are None or if both are provided.
     :return:
     """
     # TODO: check that all the bold images are aligned
@@ -466,7 +411,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                 sorted_labels=sorted_labels,
                 unique_nodes=unique_nodes,
                 fwhm=fwhm,
-                resampled_reference=resampled_reference)
+                resampled_reference=resampled_reference,
+                low_memory=low_memory)
         else:
             warnings.warn("Computing Gaussian kernels for each component. This may take a very long time for "
                           "large Guassian FWHM values and/or high resolution images.")
@@ -520,9 +466,6 @@ def add_file_args(parser):
                         help="Optional output labelmap filename to save the individual components that were smoothed. "
                              "By default, this is saved to the '{output_basename}_components.nii.gz'. "
                              "To disable, set to None. ")
-    parser.add_argument("--surface_affine", type=str,
-                        help="Optional affine affine matrix to apply to the surface coordinates to align them to the "
-                             "image space. Typically, labeled 'from-fsnative_to-T1w' in the fmriprep output.")
     return parser
 
 
@@ -544,6 +487,11 @@ def add_parameter_args(parser):
                         help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
                              "requirements and runtime. Default is 1.0 mm.")
+    parser.add_argument("--low_mem", action='store_true',
+                        help="If set, use low memory mode. This will reduce memory usage but may increase runtime. "
+                             "Memory usage is reduced by smoothing each timepoint separately instead of all at once. "
+                             "This is useful for very large images or when running on machines with limited memory. "
+                             "Default is to smooth all timepoints at once.")
     parser.add_argument("--debug", action='store_true',
                         help="If set, enable debug logging. Default is to use info level logging.")
     return parser
@@ -589,7 +537,8 @@ def main():
                  mask_file=args.mask_file,
                  mask_dilation=args.mask_dilation,
                  output_labelmap=output_labelmap,
-                 resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size), )
+                 resample_resolution=(args.voxel_size, args.voxel_size, args.voxel_size),
+                 low_memory=args.low_mem)
 
     logger.info("Smoothing complete.")
 

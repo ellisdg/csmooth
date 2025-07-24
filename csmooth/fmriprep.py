@@ -131,11 +131,14 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None))
+    print("Overwriting output filenames:", parameters["overwrite"])
     for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
         if not parameters["overwrite"] and os.path.exists(output_filename):
             logger.warning(f"Output file already exists, skipping: {output_filename}")
             files["bold_files"].remove(input_filename)
             output_filenames.remove(output_filename)
+        else:
+            print(f"Processing {input_filename} to {output_filename}")
     if not files["bold_files"]:
         logger.info(f"All output files already exist in {output_subject_dir}, skipping processing.")
         return
@@ -154,7 +157,8 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   tau=parameters.get("tau", None),
                   fwhm=parameters.get("fwhm", None),
                   mask_dilation=parameters.get("mask_dilation", None),
-                  resample_resolution=resample_resolution)
+                  resample_resolution=resample_resolution,
+                  low_memory=parameters.get("low_memory", False))
 
     logger.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 
