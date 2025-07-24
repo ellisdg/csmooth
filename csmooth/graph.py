@@ -28,7 +28,7 @@ def compute_distance_to_surface(edges_src, directions_normalized, coordinates, t
 
 
 def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, edge_src_indices, edge_dst_indices,
-                              min_tolerance=1e-6, max_tolerance=1e-2):
+                              min_tolerance=1e-6, max_tolerance=1e-3):
     """
     Remove edges that intersect with the surface. Use trimesh to check for intersections.
     :param edges_src: source nodes of the edges (n, 3) numpy array. Each row is the (x, y, z) coordinate of a node.
@@ -71,7 +71,6 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, ed
                          total=len(vertex_coords),
                          unit="surface",
                          desc="Removing intersecting edges"):
-        # TODO: adjust tolerance based on whether the number of connected components from all the surfaces is as expected
 
         edge_src_to_intersection, indices_ray = compute_distance_to_surface(edges_src[retained_mask],
                                                                             directions_normalized[retained_mask],
@@ -81,7 +80,7 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, ed
         # (i.e. the edge does not intersect with the surface)
         # Add a small tolerance to handle floating point inaccuracies
 
-        for tolerance in np.linspace(min_tolerance, max_tolerance, 10):
+        for tolerance in np.logspace(np.log10(min_tolerance), np.log10(max_tolerance), 5):
             tmp_retained_mask = retained_mask.copy()
             _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
             true_indices = np.flatnonzero(tmp_retained_mask)
@@ -100,25 +99,29 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, ed
                 logger.debug(f"Could not increase the number of connected components from {n_components} "
                              f"to {n_components + 1} using tolerance up to {max_tolerance:.1e} mm. "
                              f"Trying to shift the ray directions slightly to avoid potential floating point inaccuracies.")
-                shift = np.asarray([1e-8, 1e-8, 1e-8])
-                edge_src_to_intersection, indices_ray = compute_distance_to_surface(edges_src[tmp_retained_mask],
-                                                                                    directions_normalized[tmp_retained_mask] + shift,
-                                                                                    coo, tri)
-                _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
-                true_indices = np.flatnonzero(tmp_retained_mask)
-                tmp_retained_mask[true_indices[indices_ray]] = _retained_mask
-                new_n_components = number_of_connected_components(edge_src=edge_src_indices[tmp_retained_mask],
-                                                                  edge_dst=edge_dst_indices[tmp_retained_mask])
-                removed_edges_after_shift = (~tmp_retained_mask).sum()
+                shifts = np.array([[1e-3, 0, 0], [-1e-3, 0, 0],
+                                      [0, 1e-3, 0], [0, -1e-3, 0],
+                                      [0, 0, 1e-3], [0, 0, -1e-3]])
+                for shift in shifts:
+                    edge_src_to_intersection, indices_ray = compute_distance_to_surface(edges_src[tmp_retained_mask],
+                                                                                        directions_normalized[tmp_retained_mask] + shift,
+                                                                                        coo, tri)
+                    _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
+                    true_indices = np.flatnonzero(tmp_retained_mask)
+                    tmp_retained_mask[true_indices[indices_ray]] = _retained_mask
+                    new_n_components = number_of_connected_components(edge_src=edge_src_indices[tmp_retained_mask],
+                                                                      edge_dst=edge_dst_indices[tmp_retained_mask])
+                    removed_edges_after_shift = (~tmp_retained_mask).sum()
 
+                    if new_n_components > n_components:
+                        logger.debug(f"Increased number of connected components from {n_components} to {new_n_components} " 
+                                     f"by using a tolerance of {tolerance:.1e} mm and shifting the ray directions slightly.")
+                        logger.debug(f"Removed an additional {removed_edges_after_shift - removed_edges_before_shift} edges "
+                                        f"by shifting the ray directions slightly.")
+                        break
                 if new_n_components > n_components:
-                    logger.debug(f"Increased number of connected components from {n_components} to {new_n_components} " 
-                                 f"by using a tolerance of {tolerance:.1e} mm and shifting the ray directions slightly.")
-                    logger.debug(f"Removed an additional {removed_edges_after_shift - removed_edges_before_shift} edges "
-                                    f"by shifting the ray directions slightly.")
                     n_components = new_n_components
                     retained_mask = tmp_retained_mask
-                    break
                 else:
                     raise ValueError(f"Could not increase the number of connected components from {n_components} "
                                      f"to {n_components + 1}. Even after trying to shift the ray directions slightly. "
