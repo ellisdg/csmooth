@@ -95,7 +95,7 @@ def derive_output_filenames(output_subject_dir, input_filenames, tau=None, fwhm=
     output_filenames = []
     for input_filename in input_filenames:
         base_name = os.path.basename(input_filename)
-        output_base_name = base_name.replace("_desc-preproc_bold", "desc-csmooth_{}_bold")
+        output_base_name = base_name.replace("_desc-preproc_bold", "_desc-csmooth_{}_bold")
 
         # Add smoothing parameters to the output filename
         if tau is None and fwhm is None:
