@@ -27,7 +27,7 @@ def find_surface_files(fmriprep_subject_dir):
     return surface_files
 
 
-def find_bold_files(fmriprep_subject_dir):
+def find_fmriprep_bold_files(fmriprep_subject_dir):
     """
     Find BOLD files in the fmriprep subject directory.
     :param fmriprep_subject_dir: Directory containing fmriprep outputs for a subject
@@ -62,34 +62,68 @@ def find_mask_file(fmriprep_subject_dir):
 
     return mask_files[0]  # Return the single mask file found
 
+def find_t1w_to_mni_transform(fmriprep_subject_dir):
+    """
+    Find the T1w to MNI transformation file in the fmriprep subject directory.
+    :param fmriprep_subject_dir: Directory containing fmriprep outputs for a subject
+    :return: Path to the T1w to MNI transformation file
+    """
+    # TODO: allow for use of different MNI spaces, e.g. MNI152NLin6Asym
+    transform_file = os.path.join(fmriprep_subject_dir, "**", "anat", "*_from-T1w_to-MNI152NLin2009cAsym_mode-image_xfm.h5")
+    transform_files = glob.glob(transform_file, recursive=True)
 
-def find_fmriprep_files(fmriprep_subject_dir):
+    if not transform_files:
+        raise FileNotFoundError(f"No T1w to MNI transformation file found in {fmriprep_subject_dir}/anat")
+
+    if len(transform_files) > 1:
+        raise ValueError(f"Expected exactly one T1w to MNI transformation file, found {len(transform_files)}: {transform_files}")
+
+    return transform_files[0]  # Return the single transformation file found
+
+
+def find_fmriprep_files(fmriprep_subject_dir, find_bold_files=True, find_t1w_to_mni=False):
     """
     Find all necessary fMRIPrep files for a subject.
     :param fmriprep_subject_dir: Directory containing fmriprep outputs for a subject
+    :param find_bold_files: If True, also find the BOLD files in T1w space. (default: True)
+    This can be set to False if you want to use custom BOLD files.
+    :param find_t1w_to_mni: If True, also find the T1w to MNI transformation file
     :return: A dictionary with surface files, BOLD files, and mask file
     """
     if not os.path.exists(fmriprep_subject_dir):
         raise FileNotFoundError(f"fMRIPrep subject directory does not exist: {fmriprep_subject_dir}")
 
     surface_files = find_surface_files(fmriprep_subject_dir)
-    bold_files = find_bold_files(fmriprep_subject_dir)
+
+    if find_bold_files:
+        bold_files = find_fmriprep_bold_files(fmriprep_subject_dir)
+    else:
+        bold_files = []
+
+
     mask_file = find_mask_file(fmriprep_subject_dir)
+    if find_t1w_to_mni:
+        t1w_to_mni_transform = find_t1w_to_mni_transform(fmriprep_subject_dir)
+        logger.info(f"Found T1w to MNI transformation file: {t1w_to_mni_transform}")
+    else:
+        t1w_to_mni_transform = None
 
     return {
         "surface_files": surface_files,
         "bold_files": bold_files,
-        "mask_file": mask_file
+        "mask_file": mask_file,
+        "t1w_to_mni_transform": t1w_to_mni_transform
     }
 
 
-def derive_output_filenames(output_subject_dir, input_filenames, tau=None, fwhm=None):
+def derive_output_filenames(output_subject_dir, input_filenames, tau=None, fwhm=None, output_to_mni=False):
     """
     Based on the input parameters and found files, derive output filenames for smoothed images.
     :param output_subject_dir: Output directory for smoothed images
     :param input_filenames: a list of file paths to the input BOLD images
     :param tau: Smoothing parameter in seconds (optional)
     :param fwhm: Smoothing parameter in mm (optional)
+    :param output_to_mni: If True, output filenames will be modified to indicate MNI space.
     :return: output_filenames: a list of output filenames for smoothed images
     """
     output_filenames = []
@@ -109,20 +143,38 @@ def derive_output_filenames(output_subject_dir, input_filenames, tau=None, fwhm=
         else:
             raise ValueError("Invalid smoothing parameters provided.")
 
-        output_filenames.append(os.path.join(output_subject_dir, "func", output_base_name))
+        if output_to_mni:
+            if "space-T1w" in output_base_name:
+                output_base_name = output_base_name.replace("space-T1w", "space-MNI152NLin2009cAsym")
+            else:
+                raise ValueError("Output to MNI space requested, but input filenames do not contain 'space-T1w'. "
+                                 "Please ensure input files have space-T1w in their file names.")
+
+        output_filename = os.path.join(output_subject_dir, "func", output_base_name)
+        if output_filename in output_filenames:
+            raise ValueError(f"Output filename already exists: {output_filename}. "
+                             f"Please check that your input file basenames are unique.")
+        output_filenames.append(output_filename)
 
     return output_filenames
 
 
 
-def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameters):
+def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameters, bold_files=None,
+                             output_to_mni=False):
     """
     Process a single fMRIPrep subject directory to prepare for constrained smoothing.
     :param fmriprep_subject_dir: Directory containing fMRIPrep outputs for a subject
     :param output_subject_dir: Directory to save the processed outputs
     :param parameters: Dictionary of smoothing parameters
+    :param bold_files: Optional list of input BOLD files to process instead of finding them in fMRIPrep directory
+    :param output_to_mni: If True, outputs will be resampled to MNI space
+    :return: None
     """
-    files = find_fmriprep_files(fmriprep_subject_dir)
+    files = find_fmriprep_files(fmriprep_subject_dir, find_bold_files=bold_files is None,
+                                find_t1w_to_mni=output_to_mni)
+    if bold_files is not None:
+        files["bold_files"] = bold_files
 
     logger.info(f"Processing fMRIPrep subject directory: {fmriprep_subject_dir}")
 
@@ -130,7 +182,8 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     output_labelmap_file = os.path.join(output_subject_dir, "anat", "components_labelmap.nii.gz")
     output_filenames = derive_output_filenames(output_subject_dir, files["bold_files"],
                                                tau=parameters.get("tau", None),
-                                               fwhm=parameters.get("fwhm", None))
+                                               fwhm=parameters.get("fwhm", None),
+                                               output_to_mni=output_to_mni)
     print("Overwriting output filenames:", parameters["overwrite"])
     for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
         if not parameters["overwrite"] and os.path.exists(output_filename):
@@ -140,7 +193,7 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
         else:
             print(f"Processing {input_filename} to {output_filename}")
     if not files["bold_files"]:
-        logger.info(f"All output files already exist in {output_subject_dir}, skipping processing.")
+        logger.info(f"All output files already exist in {output_subject_dir}; skipping processing.")
         return
     kernel_basename = os.path.join(output_subject_dir,
                                    "cache",
@@ -158,7 +211,8 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                   fwhm=parameters.get("fwhm", None),
                   mask_dilation=parameters.get("mask_dilation", None),
                   resample_resolution=resample_resolution,
-                  low_memory=parameters.get("low_memory", False))
+                  low_memory=parameters.get("low_memory", False),
+                  t1w_to_mni_transform=files.get("t1w_to_mni_transform", None))
 
     logger.info(f"Processed subject in {fmriprep_subject_dir}, outputs saved to {output_subject_dir}")
 
@@ -172,6 +226,18 @@ def parse_args():
                         help="Path to the output directory to save the smoothed images")
     parser.add_argument("--subject", type=str,
                         help="Specify a single subject to process (default: all subjects in fmriprep_dir)",)
+    parser.add_argument("--bold_files", type=str, nargs="+",
+                        help="List of input BOLD files in T1w space to process "
+                             "(optional, requires --subject to be specified, will ignore BOLD files in fmriprep_dir). "
+                             "Use this option to specify custom input files for constrained smoothing, but still use "
+                             "the surface and mask files from the fMRIPrep directory. "
+                             "Input files should be in T1w space and have 'space-T1w' in their filenames. "
+                             "If not specified, the script will find BOLD files in the fMRIPrep directory.")
+    parser.add_argument("--output_to_mni", action="store_true",
+                        help="If set, outputs will be resampled to MNI space. "
+                             "This is accomplished by finding the T1w to MNI transformation file in the fMRIPrep "
+                             "directory and applying it to the smoothed images. "
+                             "If True, T1w space files will not be saved to the output directory")
     add_parameter_args(parser)
     args = parser.parse_args()
     check_parameters(args, parser)
@@ -184,12 +250,17 @@ def main():
     fmriprep_dir = kwargs.pop("fmriprep_dir")
     output_dir = kwargs.pop("output_dir")
     subject_id = kwargs.pop("subject")
+    bold_files = kwargs.pop("bold_files", None)
+    output_to_mni = kwargs.pop("output_to_mni")
 
     # Enable NetworkX parallel configuration
     nx.config.backends.parallel.active = True
     nx.config.backends.parallel.n_jobs = kwargs["multiproc"]
 
     if subject_id is None:
+        if bold_files is not None:
+            raise ValueError("Cannot specify --in_files without --subject. "
+                             "Please specify a subject to process or remove the --in_files option.")
         subject_dirs = sorted(glob.glob(os.path.join(fmriprep_dir, "sub-*")))
         for fmriprep_subject_dir in subject_dirs:
             if not os.path.isdir(fmriprep_subject_dir):
@@ -204,7 +275,8 @@ def main():
             raise FileNotFoundError(f"Subject directory does not exist: {fmriprep_subject_dir}")
         output_subject_dir = os.path.join(output_dir, f"sub-{subject_id}")
         os.makedirs(output_subject_dir, exist_ok=True)
-        process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, kwargs)
+        process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, kwargs, bold_files=bold_files,
+                                 output_to_mni=output_to_mni)
 
 
 

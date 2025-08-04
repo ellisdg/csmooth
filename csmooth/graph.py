@@ -87,8 +87,18 @@ def remove_intersecting_edges(edges_src, edges_dst, vertex_coords, triangles, ed
         for tolerance in np.logspace(np.log10(min_tolerance), np.log10(max_tolerance), 5):
             tmp_retained_mask = retained_mask.copy()
             _retained_mask = (lengths[tmp_retained_mask][indices_ray] + tolerance) < edge_src_to_intersection
+
             true_indices = np.flatnonzero(tmp_retained_mask)
             tmp_retained_mask[true_indices[indices_ray]] = _retained_mask
+
+            # TODO: remove reciprocal edges.
+            # If an edge from src to dst is removed, the edge from dst to src should also be removed
+            # I'm not sure how to do this efficiently yet, but it should be possible.
+            # for all edge_src_indices and edge_dst_indices pairs that are False in tmp_retained_mask,
+            # set tmp_retained_mask to False for the corresponding edge_dst_indices and edge_src_indices pairs.
+            # BUT when I check for connected components, I make sure the adjacency matrix is symmetric,
+            # so this should not be necessary.
+
             new_n_components = number_of_connected_components(edge_src=edge_src_indices[tmp_retained_mask],
                                                               edge_dst=edge_dst_indices[tmp_retained_mask])
             if new_n_components > n_components:

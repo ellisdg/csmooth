@@ -9,4 +9,5 @@ pygsp
 trimesh
 embreex
 xxhash
-nitransforms
+nitransforms<25.0.0
+templateflow

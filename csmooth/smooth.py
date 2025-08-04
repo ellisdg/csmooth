@@ -16,6 +16,7 @@ from csmooth.graph import create_graph, select_nodes
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.optimization import find_optimal_tau
 from csmooth.utils import logger
+from csmooth.resampling import resample_image
 
 
 def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
@@ -208,8 +209,25 @@ def load_reference_image(reference_file, resample_resolution=None):
     return reference_image, resampled_reference
 
 
-def write_image(image, out_file, target_image=None):
-    if target_image is not None:
+def write_image(image, out_file, target_image=None, output_transform=None):
+    """
+    Write the smoothed image to a file, optionally resampling it to match a target image.
+    :param image:
+    :param out_file:
+    :param target_image:
+    :param output_transform:
+    :return:
+    """
+    if output_transform is not None:
+        if target_image is not None:
+            image = resample_image(input_image=image,
+                                   local_reference_image=target_image,
+                                   transform_file=output_transform)
+        else:
+            image = resample_image(input_image=image,
+                                   local_reference_image=image,
+                                   transform_file=output_transform)
+    elif target_image is not None:
         logger.debug("Resampling smoothed image from shape %s to %s",
                       image.shape, target_image.shape)
         image = nilearn.image.resample_to_img(
@@ -225,7 +243,8 @@ def write_image(image, out_file, target_image=None):
 
 
 def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, edge_distances, labels, sorted_labels,
-                                       unique_nodes, fwhm, resampled_reference=None, low_memory=False):
+                                       unique_nodes, fwhm, resampled_reference=None, low_memory=False,
+                                       output_transform=None):
     """
     Apply estimated Gaussian smoothing to a list of images based on the provided graph structure.
     Finds the optimal tau for each of the five largest components in the graph (background, wm left/right, gm left/right).
@@ -241,6 +260,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
     :param fwhm: Target full width at half maximum in mm for smoothing.
     :param resampled_reference: Optional reference image to resample the smoothed images to.
     :param low_memory: If True, use low memory mode. This will reduce memory usage but may increase runtime.
+    :param output_transform: Optional transformation to apply to the smoothed images before writing them to file.
     :return: None
     """
     # Estimate optimal tau for each component to achieve the target fwhm
@@ -307,7 +327,8 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
 
         write_image(image=smoothed_image,
                     out_file=out_file,
-                    target_image=orig_image)
+                    target_image=orig_image,
+                    output_transform=output_transform)
 
 
 def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_reference=None):
@@ -354,7 +375,8 @@ def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_r
 def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
-                  estimate=True, low_memory=False):
+                  estimate=True, low_memory=False,
+                  t1w_to_mni_transform=None):
     """
     Smooth an image using graph signal smoothing.
     :param in_files: Path to a Nifti files to be smoothed.
@@ -380,6 +402,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
     :param low_memory: If True, use low memory mode. This will reduce memory usage but may increase runtime.
     Memory usage is reduced by smoothing each timepoint separately instead of all at once. This is useful for large
     images with many timepoints. If False, all timepoints are smoothed at once which is faster but requires more memory.
+    :param t1w_to_mni_transform: Optional transformation matrix to apply to the smoothed image after processing
+    to align it to MNI space before writing it to file.
     :raises ValueError: If both tau and fwhm are None or if both are provided.
     :return:
     """
@@ -412,7 +436,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                 unique_nodes=unique_nodes,
                 fwhm=fwhm,
                 resampled_reference=resampled_reference,
-                low_memory=low_memory)
+                low_memory=low_memory,
+                output_transform=t1w_to_mni_transform)
         else:
             warnings.warn("Computing Gaussian kernels for each component. This may take a very long time for "
                           "large Guassian FWHM values and/or high resolution images.")
