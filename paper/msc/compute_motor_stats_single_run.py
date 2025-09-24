@@ -106,23 +106,10 @@ def main():
                 print(f"Average file {average_filename} exists, skipping")
             avg_img = nib.load(average_filename)
 
-            # compute stats for no smoothing
-            no_smoothing_sessions = list()
-            for filename in no_smoothing_filenames:
-                session = re.search(r"ses-(func\d+)", filename).group(1)
-                no_smoothing_sessions.append(session)
-            print(f"No smoothing sessions: {set(no_smoothing_sessions)}")
-            for session in set(no_smoothing_sessions):
-                no_smoothing_session_filenames = [f for f in no_smoothing_filenames if re.search(r"ses-(func\d+)", f).group(1) == session]
-                assert len(no_smoothing_session_filenames) == 2, f"Expected 2 no smoothing files for session {session}, found {len(no_smoothing_session_filenames)}"
-                no_smoothing_session_filename = os.path.join(output_dir, f"sub-{subject}",
-                                                            f"ses-{session}",
-                                                            "func",
-                                                            f"sub-{subject}_ses-{session}_task-{task}_event-{zstat_name}_zstat.nii.gz")
-                if overwrite or not os.path.exists(no_smoothing_session_filename):
-                    average_image(no_smoothing_session_filenames, no_smoothing_session_filename)
-                else:
-                    print(f"'No smoothing' average file {no_smoothing_session_filename} already exists, skipping")
+
+            for no_smoothing_session_filename in no_smoothing_filenames:
+                run = re.search(r"run-(\d+)", no_smoothing_session_filename).group(1)
+                session = re.search(r"ses-(func\d+)", no_smoothing_session_filename).group(1)
                 compute_stats(
                     _filename=no_smoothing_session_filename,
                     _method="no_smoothing",
@@ -131,7 +118,7 @@ def main():
                     subject=subject,
                     session=session,
                     task=task,
-                    run="average",
+                    run=run,
                     zstat_name=zstat_name,
                     fwhm=0,
                     output_dir=output_dir,
