@@ -4,6 +4,7 @@ import nibabel as nib
 import re
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 
 def average_image(filenames, output_filename):
@@ -57,7 +58,7 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
     mse = np.mean(diff ** 2)
     mae = np.mean(np.abs(diff))
     dice = compute_dice(np.asarray(avg_img.dataobj), np.asarray(_img.dataobj))
-    pearson_r = np.pearsonr(np.asarray(avg_img.dataobj).ravel(), np.asarray(_img.dataobj).ravel())[0]
+    pearson_r = scipy.stats.pearsonr(np.asarray(avg_img.dataobj).ravel(), np.asarray(_img.dataobj).ravel())[0]
     stats.append({
         "subject": subject,
         "session": session,
