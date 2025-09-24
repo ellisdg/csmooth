@@ -1,5 +1,4 @@
 .idea
 *.pyc
-paper
 *.ipynb
 .DS_Store
