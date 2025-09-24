@@ -35,8 +35,8 @@ def compute_dice(array1, array2, threshold=3.1):
     return dice
 
 
-def compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, zstat_name, fwhm, output_dir,
-                  stats):
+def compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, run, zstat_name, fwhm,
+                  output_dir, stats, exist_ok=True):
     print(f"Processing {_method} file {os.path.basename(_filename)}")
     print(f"Comparing {average_filename} to {_filename}")
 
@@ -47,7 +47,9 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
     diff_filename = os.path.join(output_dir, f"sub-{subject}",
                                  f"ses-{session}",
                                  "func",
-                                 os.path.basename(_filename).replace(".nii.gz", f"_diff.nii.gz"))
+                                 f"sub-{subject}_ses-{session}_task-{task}_run-{run}_event-{zstat_name}_fwhm-{fwhm}_{_method}_diff.nii.gz")
+    if os.path.exists(diff_filename) and not exist_ok:
+        raise FileExistsError(f"Diff file {diff_filename} already exists and exist_ok is False")
     os.makedirs(os.path.dirname(diff_filename), exist_ok=True)
     print(f"Writing difference image to {diff_filename}")
     diff_img = avg_img.__class__(diff, avg_img.affine)
@@ -55,6 +57,7 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
     mse = np.mean(diff ** 2)
     mae = np.mean(np.abs(diff))
     dice = compute_dice(np.asarray(avg_img.dataobj), np.asarray(_img.dataobj))
+    pearson_r = np.pearsonr(np.asarray(avg_img.dataobj).ravel(), np.asarray(_img.dataobj).ravel())[0]
     stats.append({
         "subject": subject,
         "session": session,
@@ -65,6 +68,7 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
         "mse": mse,
         "mae": mae,
         "dice": dice,
+        "pearson_r": pearson_r,
         "n_voxels": np.prod(avg_img.shape)
     })
 
@@ -78,6 +82,7 @@ def main():
     constrained_dir = f"{base_dir}/derivatives/fsl_constrained"
     output_dir = f"{base_dir}/derivatives/motor_stats"
     overwrite = False
+    exist_ok = False  # will raise an error if the diff image already exists
     os.makedirs(output_dir, exist_ok=True)
     task = "motor"
     stats = list()
@@ -116,7 +121,7 @@ def main():
                 if overwrite or not os.path.exists(no_smoothing_session_filename):
                     average_image(no_smoothing_session_filenames, no_smoothing_session_filename)
                 else:
-                    print(f"No smoothing average file {no_smoothing_session_filename} exists, skipping")
+                    print(f"'No smoothing' average file {no_smoothing_session_filename} already exists, skipping")
                 compute_stats(no_smoothing_session_filename, "no_smoothing", avg_img, average_filename, subject, session, task, zstat_name, 0, output_dir, stats)
 
             for fwhm in (3, 6, 9, 12):
@@ -150,7 +155,15 @@ def main():
 
                     for _filename, _method in ((constrained_filename, "constrained"),
                                                (gaussian_filename, "gaussian")):
-                        compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, zstat_name, fwhm, output_dir, stats)
+                        session = re.search(r"ses-(func\d+)", _filename).group(1)
+                        run = re.search(r"run-(\d+)", _filename).group(1)
+                        compute_stats(_filename, _method, avg_img, average_filename, subject, session, task,
+                                      run=run,
+                                      zstat_name=zstat_name,
+                                      fwhm=fwhm,
+                                      output_dir=output_dir,
+                                      stats=stats,
+                                      exist_ok=exist_ok)
 
 
 
