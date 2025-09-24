@@ -36,7 +36,7 @@ def compute_dice(array1, array2, threshold=3.1):
 
 
 def compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, zstat_name, fwhm, output_dir,
-                  stats):
+                  stats, exist_ok=True):
     print(f"Processing {_method} file {os.path.basename(_filename)}")
     print(f"Comparing {average_filename} to {_filename}")
 
@@ -48,12 +48,15 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
                                  f"ses-{session}",
                                  "func",
                                  f"sub-{subject}_ses-{session}_task-{task}_event-{zstat_name}_fwhm-{fwhm}_{_method}_diff.nii.gz")
+    if os.path.exists(diff_filename) and not exist_ok:
+        raise FileExistsError(f"Diff file {diff_filename} already exists and exist_ok is False")
     os.makedirs(os.path.dirname(diff_filename), exist_ok=True)
     print(f"Writing difference image to {diff_filename}")
     diff_img = avg_img.__class__(diff, avg_img.affine)
     diff_img.to_filename(diff_filename)
     mse = np.mean(diff ** 2)
     mae = np.mean(np.abs(diff))
+    pearson_r = np.pearsonr(np.asarray(avg_img.dataobj).ravel(), np.asarray(_img.dataobj).ravel())[0]
     dice = compute_dice(np.asarray(avg_img.dataobj), np.asarray(_img.dataobj))
     stats.append({
         "subject": subject,
@@ -65,6 +68,7 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
         "mse": mse,
         "mae": mae,
         "dice": dice,
+        "pearson_r": pearson_r,
         "n_voxels": np.prod(avg_img.shape)
     })
 
@@ -78,6 +82,7 @@ def main():
     constrained_dir = f"{base_dir}/derivatives/fsl_constrained"
     output_dir = f"{base_dir}/derivatives/motor_stats"
     overwrite = False
+    exist_ok = False  # will raise an error if the diff image already exists
     os.makedirs(output_dir, exist_ok=True)
     task = "motor"
     stats = list()
@@ -178,7 +183,8 @@ def main():
 
                     for _filename, _method in ((constrained_session_filename, "constrained"),
                                                (gaussian_session_filename, "gaussian")):
-                        compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, zstat_name, fwhm, output_dir, stats)
+                        compute_stats(_filename, _method, avg_img, average_filename, subject, session, task,
+                                      zstat_name, fwhm, output_dir, stats, exist_ok=exist_ok)
 
 
 
