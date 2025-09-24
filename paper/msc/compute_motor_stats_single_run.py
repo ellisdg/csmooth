@@ -123,7 +123,21 @@ def main():
                     average_image(no_smoothing_session_filenames, no_smoothing_session_filename)
                 else:
                     print(f"'No smoothing' average file {no_smoothing_session_filename} already exists, skipping")
-                compute_stats(no_smoothing_session_filename, "no_smoothing", avg_img, average_filename, subject, session, task, zstat_name, 0, output_dir, stats)
+                compute_stats(
+                    _filename=no_smoothing_session_filename,
+                    _method="no_smoothing",
+                    avg_img=avg_img,
+                    average_filename=average_filename,
+                    subject=subject,
+                    session=session,
+                    task=task,
+                    run="average",
+                    zstat_name=zstat_name,
+                    fwhm=0,
+                    output_dir=output_dir,
+                    stats=stats,
+                    exist_ok=exist_ok
+                )
 
             for fwhm in (3, 6, 9, 12):
                 print(f"Processing fwhm {fwhm}")
