@@ -6,6 +6,7 @@ from csmooth.utils import logger
 from csmooth.affine import adjust_affine_spacing
 import nilearn
 import numpy as np
+from tqdm import tqdm
 
 
 def resample_image(input_image, local_reference_image, transform_file, resolution=1, suffix='T1w'):
@@ -51,7 +52,6 @@ def resample_image(input_image, local_reference_image, transform_file, resolutio
     logger.debug(f"Loading transform file: {transform_file}")
     transform = nt.manip.load(transform_file)
 
-    logger.info(f"Applying transform to input image: {input_image}")
     return resample_4d_image(input_image, mni_reference_image, transform)
 
 
@@ -60,7 +60,7 @@ def resample_4d_image(input_image, reference_image, transform):
     input_data = input_image.get_fdata()
     n_vols = input_data.shape[-1]
     resampled_vols = []
-    for t in range(n_vols):
+    for t in tqdm(range(n_vols), desc="Resampling volumes"):
         vol_img = nib.Nifti1Image(input_data[..., t], input_image.affine, input_image.header)
         resampled_vol = nt.resampling.apply(transform=transform,
                                             spatialimage=vol_img,

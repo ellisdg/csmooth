@@ -20,6 +20,6 @@ def heat_kernel_smoothing(edge_src, edge_dst, edge_distances, signal_data, tau):
 
 def _heat_kernel_smoothing(G, signal_data, nodes, tau):
     # filter graph
-    heat_filter = filters.Heat(G, tau=tau)
+    heat_filter = filters.Heat(G, scale=tau)
     signal_data[nodes] = heat_filter.filter(signal_data[nodes])
     return signal_data
