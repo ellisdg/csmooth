@@ -83,7 +83,7 @@ def main():
     constrained_dir = f"{base_dir}/derivatives/fsl_constrained"
     output_dir = f"{base_dir}/derivatives/motor_stats"
     overwrite = False
-    exist_ok = False  # will raise an error if the diff image already exists
+    exist_ok = True  # will raise an error if the diff image already exists
     os.makedirs(output_dir, exist_ok=True)
     task = "motor"
     stats = list()
