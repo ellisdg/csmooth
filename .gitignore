@@ -1,5 +1,5 @@
 .idea
 *.pyc
-paper/**.pdf
-paper/**.png
+paper/*/*.pdf
+paper/*/*.png
 *.csv
