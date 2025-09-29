@@ -3,3 +3,4 @@
 paper/*/*.pdf
 paper/*/*.png
 *.csv
+*.parquet
