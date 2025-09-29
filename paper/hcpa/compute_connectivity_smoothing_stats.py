@@ -96,24 +96,6 @@ def compute_roi_to_roi_distances(atlas_img):
     return distance_matrix, roi_indices
 
 
-def compute_fmri_connectivity(fmri_files, atlas_img):
-    # Initialize the masker with the atlas image
-    masker = NiftiLabelsMasker(labels_img=atlas_img, standardize="zscore", detrend=False, background_label=0,
-                               resampling_target="data", strategy="mean")
-    time_series = list()
-    for fmri_file in tqdm(fmri_files, desc="Extracting time series from FMRI files", unit="file"):
-        fmri_img = nib.load(fmri_file)
-        ts = masker.fit_transform(fmri_img)
-        time_series.append(ts)
-    time_series = np.vstack(time_series)
-
-    # Compute the connectivity matrix using Pearson correlation
-    connectivity_measure = ConnectivityMeasure(kind='correlation')
-    connectivity_matrix = connectivity_measure.fit_transform([time_series])[0]
-    # fisher z-transform
-    connectivity_matrix = np.arctanh(connectivity_matrix)
-    return connectivity_matrix
-
 
 def compute_connectivity_for_key(args):
     key, fmri_files, atlas_img = args
