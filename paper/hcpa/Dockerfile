@@ -12,7 +12,7 @@ RUN apt-get update && \
 RUN pip3 install --no-cache-dir numpy pandas nibabel networkx pyarrow templateflow tqdm
 
 # Install R packages
-RUN R -e "options(warn=2); install.packages(c('ggplot2', 'dplyr', 'tidyr', 'arrow', 'mgcv', 'lme4', 'broom', 'readr'))"
+RUN R -e "options(warn=2); install.packages(c('ggplot2', 'dplyr', 'tidyr', 'arrow', 'mgcv', 'lme4', 'broom', 'broom.mixed', 'readr'))"
 
 # Set working directory
 WORKDIR /app/hcpa
