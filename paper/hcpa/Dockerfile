@@ -9,7 +9,6 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
-COPY requirements.txt .
 RUN pip3 install --no-cache-dir numpy pandas nibabel networkx pyarrow templateflow tqdm
 
 # Install R packages
