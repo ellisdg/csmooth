@@ -7,6 +7,8 @@ from tqdm import tqdm
 import pandas as pd
 import networkx as nx
 import argparse
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 
 def fetch_atlas_image(template="MNI152NLin2009cAsym", atlas="Schaefer2018", description="1000Parcels7Networks", resolution=1):
@@ -51,6 +53,35 @@ def compute_adjacency_matrix(connectivity_matrix, graph_density=0.2):
     return adjacency_matrix
 
 
+def create_network_communities(atlas_labels_df, roi_indices):
+    """Create community assignments based on network labels from the atlas."""
+    # Extract network information from the label names
+    # Schaefer atlas labels follow format: "7Networks_LH_Vis_1" or "7Networks_RH_Default_1"
+    communities = []
+    network_to_community = {}
+    community_id = 0
+    
+    for roi_idx in roi_indices:
+        # roi_indices are 1-based, atlas_labels_df index is also 1-based
+        label_name = atlas_labels_df.loc[int(roi_idx), 'name']
+        
+        # Extract network name (e.g., "Vis", "Default", etc.)
+        parts = label_name.split('_')
+        if len(parts) >= 3:
+            network = parts[2]  # Network name is the 3rd part
+        else:
+            network = 'Unknown'
+        
+        # Assign community ID for this network
+        if network not in network_to_community:
+            network_to_community[network] = community_id
+            community_id += 1
+        
+        communities.append(network_to_community[network])
+    
+    return communities
+
+
 def compute_graph_metrics(adjacency_matrix, communities=None):
     G = nx.from_numpy_array(adjacency_matrix)
     local_eff = nx.local_efficiency(G)
@@ -58,7 +89,14 @@ def compute_graph_metrics(adjacency_matrix, communities=None):
     clustering_coeff = np.mean(list(nx.clustering(G).values()))
     if communities is None:
         communities = list(nx.algorithms.community.greedy_modularity_communities(G))
-    modularity = nx.algorithms.community.quality.modularity(G, communities)
+        modularity = nx.algorithms.community.quality.modularity(G, communities)
+    else:
+        # Convert community assignments to community sets for NetworkX
+        community_sets = []
+        unique_communities = set(communities)
+        for comm_id in unique_communities:
+            community_sets.append(set([i for i, c in enumerate(communities) if c == comm_id]))
+        modularity = nx.algorithms.community.quality.modularity(G, community_sets)
     return local_eff, global_eff, clustering_coeff, modularity
 
 
@@ -66,6 +104,52 @@ def append_data(data, subject, method, fwhm, distance_values, connectivity_value
     for dist, conn in zip(distance_values, connectivity_values):
         data.append((subject, method, fwhm, dist, conn))
     return data
+
+
+def process_subject(subject_dir, distance_values, network_communities, graph_density):
+    """Process a single subject and return metrics and data."""
+    subject_name = os.path.basename(subject_dir)
+    subject_data = []
+    subject_metrics = []
+    
+    # Process no smoothing
+    ns_filename = os.path.join(subject_dir, "func",
+                               f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_no_smoothing_fwhm-0_connectivity.npy")
+    ns_matrix = np.load(ns_filename)
+    ns_graph_metrics = compute_graph_metrics(compute_adjacency_matrix(ns_matrix, graph_density=graph_density), communities=network_communities)
+    subject_metrics.append((subject_name, "gaussian", 0, graph_density, *ns_graph_metrics))
+    subject_metrics.append((subject_name, "constrained", 0, graph_density, *ns_graph_metrics))
+    
+    triu_indices = np.triu_indices_from(ns_matrix, k=1)
+    ns_values = ns_matrix.astype(np.float32)[triu_indices]
+    
+    # append no smoothing values twice, once for each method
+    subject_data = append_data(subject_data, subject_name, "gaussian", 0, distance_values, ns_values)
+    subject_data = append_data(subject_data, subject_name, "constrained", 0, distance_values, ns_values)
+    del ns_values, ns_matrix
+
+    # Process different FWHM values
+    for fwhm in (3, 6, 9, 12):
+        cs_filename = os.path.join(subject_dir, "func",
+                                   f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_csmooth_fwhm-{fwhm}_connectivity.npy")
+        cs_matrix = np.load(cs_filename)
+        subject_metrics.append((subject_name, "constrained", fwhm, graph_density,
+                        *compute_graph_metrics(compute_adjacency_matrix(cs_matrix, graph_density=graph_density), communities=network_communities)))
+        cs_values = cs_matrix[triu_indices].astype(np.float32)
+        subject_data = append_data(subject_data, subject_name, "constrained", fwhm, distance_values, cs_values)
+        del cs_values, cs_matrix
+        
+        gs_filename = os.path.join(subject_dir, "func",
+                                   f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_gaussian_fwhm-{fwhm}_connectivity.npy")
+        gs_matrix = np.load(gs_filename)
+        subject_metrics.append((subject_name, "gaussian", fwhm, graph_density,
+                        *compute_graph_metrics(compute_adjacency_matrix(gs_matrix, graph_density=graph_density), communities=network_communities)))
+        gs_values = gs_matrix[triu_indices].astype(np.float32)
+        subject_data = append_data(subject_data, subject_name, "gaussian", fwhm, distance_values, gs_values)
+        del gs_values, gs_matrix
+    
+    return subject_data, subject_metrics
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Compute connectivity smoothing statistics.")
@@ -81,12 +165,18 @@ def parse_args():
                         help="Graph density for adjacency matrix computation.")
     return parser.parse_args()
 
+
 def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_density=0.2):
 
     print("Fetching atlas image and labels...")
     atlas_image, atlas_labels_df = fetch_atlas_image()
     distance_matrix, roi_indices = compute_roi_to_roi_distances(atlas_image)
     print("Distance matrix shape:", distance_matrix.shape)
+    
+    # Create network communities based on atlas labels
+    network_communities = create_network_communities(atlas_labels_df, roi_indices)
+    print(f"Created {len(set(network_communities))} network communities")
+    
     # extract upper triangle of the distance matrix
     triu_indices = np.triu_indices_from(distance_matrix, k=1)
     distance_values = distance_matrix[triu_indices].astype(np.float32)
@@ -94,41 +184,28 @@ def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_d
     subject_dirs = sorted(glob.glob(os.path.join(connectivity_dir, "sub-*")))
     if n_subjects is not None:
         subject_dirs = subject_dirs[:n_subjects]
-    data = list()
-    metrics = list()
-    for subject_dir in tqdm(subject_dirs, desc="Processing subjects", unit="subject"):
-        subject_name = os.path.basename(subject_dir)
-        ns_filename = os.path.join(subject_dir, "func",
-                                   f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_no_smoothing_fwhm-0_connectivity.npy")
-        ns_matrix = np.load(ns_filename)
-        metrics.append((subject_name, "gaussian", 0, graph_density,
-                        *compute_graph_metrics(compute_adjacency_matrix(ns_matrix, graph_density=graph_density))))
-        metrics.append((subject_name, "constrained", 0, graph_density,
-                        *compute_graph_metrics(compute_adjacency_matrix(ns_matrix, graph_density=graph_density))))
-        ns_values = ns_matrix.astype(np.float32)[triu_indices]
-
-        # append no smoothing values twice, once for each method
-        data = append_data(data, subject_name, "gaussian", 0, distance_values, ns_values)
-        data = append_data(data, subject_name, "constrained", 0, distance_values, ns_values)
-        del ns_values, ns_matrix
-
-        for fwhm in (3, 6, 9, 12):
-            cs_filename = os.path.join(subject_dir, "func",
-                                       f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_csmooth_fwhm-{fwhm}_connectivity.npy")
-            cs_matrix = np.load(cs_filename)
-            metrics.append((subject_name, "constrained", fwhm, graph_density,
-                            *compute_graph_metrics(compute_adjacency_matrix(cs_matrix, graph_density=graph_density))))
-            cs_values = cs_matrix[triu_indices].astype(np.float32)
-            data = append_data(data, subject_name, "constrained", fwhm, distance_values, cs_values)
-            del cs_values, cs_matrix
-            gs_filename = os.path.join(subject_dir, "func",
-                                       f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_gaussian_fwhm-{fwhm}_connectivity.npy")
-            gs_matrix = np.load(gs_filename)
-            metrics.append((subject_name, "gaussian", fwhm, graph_density,
-                            *compute_graph_metrics(compute_adjacency_matrix(gs_matrix, graph_density=graph_density))))
-            gs_values = gs_matrix[triu_indices].astype(np.float32)
-            data = append_data(data, subject_name, "gaussian", fwhm, distance_values, gs_values)
-            del gs_values, gs_matrix
+    
+    # Use multiprocessing to process subjects
+    print(f"Processing {len(subject_dirs)} subjects using {cpu_count()} CPU cores...")
+    process_func = partial(process_subject, 
+                          distance_values=distance_values, 
+                          network_communities=network_communities, 
+                          graph_density=graph_density)
+    
+    data = []
+    metrics = []
+    
+    with Pool() as pool:
+        results = list(tqdm(pool.imap(process_func, subject_dirs), 
+                           total=len(subject_dirs), 
+                           desc="Processing subjects", 
+                           unit="subject"))
+    
+    # Collect results
+    for subject_data, subject_metrics in results:
+        data.extend(subject_data)
+        metrics.extend(subject_metrics)
+    
     metrics_df = pd.DataFrame(metrics,
                               columns=["Subject", "Method", "FWHM", "GraphDensity",
                                        "LocalEfficiency", "GlobalEfficiency", "ClusteringCoefficient", "Modularity"])
@@ -143,7 +220,6 @@ def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_d
     print("Done.")
 
 
-
 if __name__ == "__main__":
     args = parse_args()
     main(connectivity_dir=args.connectivity_dir,
@@ -151,4 +227,3 @@ if __name__ == "__main__":
          output_data=args.output_data,
          n_subjects=args.n_subjects,
          graph_density=args.graph_density)
-
