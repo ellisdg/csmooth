@@ -1,16 +1,19 @@
-FROM python:3.11-slim
-LABEL authors="david"
+FROM rocker/r-ver:4.3.3
 
-# Install R and dependencies
-RUN apt-get update && apt-get install -y \
-    r-base r-base-dev r-recommended \
+# Install Python 3.11 and pip
+# The rocker images are Debian-based, so you can use apt
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-RUN pip install --no-cache-dir numpy pandas nibabel networkx pyarrow templateflow tqdm
+# Install Python packages
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir numpy pandas nibabel networkx pyarrow templateflow tqdm
 
-# Install R dependencies with pre-compiled binaries
-RUN Rscript -e "options(repos = c(CRAN = 'https://packagemanager.posit.co/cran/__linux__/bookworm/latest')); install.packages(c('ggplot2', 'dplyr', 'tidyr', 'arrow', 'mgcv', 'lme4', 'broom', 'readr'))"
+# Install R packages
+RUN R -e "options(warn=2); install.packages(c('ggplot2', 'dplyr', 'tidyr', 'arrow', 'mgcv', 'lme4', 'broom', 'readr'))"
 
 # Set working directory
 WORKDIR /app/hcpa
