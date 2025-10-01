@@ -1,14 +1,14 @@
 start_time=$(date +%s)
 echo "Starting connectivity stats computation at $(date)"
 
-CONN_DIR="/data2/david.ellis/public/HCPA/derivatives/connectivity"
-OUTPUT_DIR="/data2/david.ellis/public/HCPA/derivatives/connectivity_stats"
+CONN_DIR="/data2/david.ellis/public/HCPA/myderivatives/connectivity"
+OUTPUT_DIR="/data2/david.ellis/public/HCPA/myderivatives/connectivity_stats"
 mkdir -p $OUTPUT_DIR
 METRICS_FILE="$OUTPUT_DIR/conn_smoothing_graph_metrics.csv"
 DATA_FILE="$OUTPUT_DIR/conn_smoothing_distance_data.parquet"
 
 echo "Computing connectivity stats"
-python /app/hcpa/compute_connectivity_smoothing_stats.py\
+python3 /app/hcpa/compute_connectivity_smoothing_stats.py\
   --connectivity_dir $CONN_DIR\
   --output_metrics $METRICS_FILE\
   --output_data $DATA_FILE\
