@@ -4,7 +4,8 @@ library(mgcv)       # for GAM modeling
 library(dplyr)      # for data manipulation
 library(arrow)     # for reading/writing parquet files
 library(tidyr)     # for pivot_wider
-
+# Load the patchwork library for combining plots
+library(patchwork)
 
 # Read command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
@@ -119,7 +120,7 @@ newdat$fit_se <- predict(model_interaction, newdata = newdat, type = "response",
 newdat_with_ci <- newdat %>%
   pivot_wider(names_from = Method, values_from = c(fit, fit_se)) %>%
   mutate(
-    Difference = fit_gaussian - fit_constrained,
+    Difference = fit_constrained - fit_gaussian,
     Diff_SE = sqrt(fit_se_gaussian^2 + fit_se_constrained^2),
     Lower_CI = Difference - 1.96 * Diff_SE,
     Upper_CI = Difference + 1.96 * Diff_SE,
@@ -138,10 +139,19 @@ ci_plot <- ggplot(data = subset(newdat_with_ci, FWHM != 0),
   scale_x_continuous(breaks = seq(0, 150, by = 20)) +
   theme_minimal() +
   labs(
-    y = "Connectivity Difference\n(Gaussian - Constrained)",
+    y = "Connectivity Difference\n(Constrained - Gaussian)",
     x = "Distance (mm)",
     color = "FWHM (mm)"
   )
 
 ci_plot_filename <- file.path(output_dir, "connectivity_difference_with_ci.pdf")
 ggsave(ci_plot_filename, ci_plot, width = 5, height = 5)
+
+# Create combined plot with labels
+combined_plot <- pred_plot + ci_plot +
+  plot_layout(ncol = 2) +
+  plot_annotation(tag_levels = 'A')
+
+# Save the combined plot
+combined_plot_filename <- file.path(output_dir, "connectivity_distance_combined_plots.pdf")
+ggsave(combined_plot_filename, combined_plot, width = 10, height = 5)

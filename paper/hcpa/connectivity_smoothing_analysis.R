@@ -4,6 +4,8 @@ library(broom.mixed)
 library(ggplot2)
 library(tidyr)
 library(readr)
+library(dplyr)
+library(tibble)
 
 # Read command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
@@ -24,104 +26,87 @@ cat("Output Directory:", output_dir, "\n")
 # read in the csv file
 metrics_data = read_csv(metrics_file)
 
-# Fit a linear mixed-effects model to assess the effect of smoothing (FWHM) on connectivity metrics
-# a different beta should be fit for Gaussian and constrained smoothing
-# metric ~ FWHM * Method + (1 | Subject)
-metrics_data$Method = factor(metrics_data$Method, levels = c("gaussian", "constrained"))
-metrics_data$Subject = factor(metrics_data$Subject)
+# --- Boxplots for each metric across smoothing conditions ---
 
+# Ensure FWHM=0 (no smoothing) is included
+metrics_data$FWHM <- as.factor(metrics_data$FWHM)
+metrics_data$Method <- factor(metrics_data$Method, levels = c("gaussian", "constrained"))
 
+metrics_levels <- c("0", "3", "6", "9", "12")
+metrics_data$FWHM <- factor(metrics_data$FWHM, levels = metrics_levels)
 
-# Initialize results dataframe
-results_table <- data.frame(
-  Metric = character(),
-  BetaGaussian = numeric(),
-  BetaGaussianCILow = numeric(),
-  BetaGaussianCIHigh = numeric(),
-  PvalueGaussian = numeric(),
-  BetaConstrained = numeric(),
-  BetaConstrainedCILow = numeric(),
-  BetaConstrainedCIHigh = numeric(),
-  PvalueConstrained = numeric(),
-  stringsAsFactors = FALSE
-)
-
-# loop over all the metrics
 metrics = c("LocalEfficiency", "GlobalEfficiency", "ClusteringCoefficient", "Modularity")
-for (metric in metrics) {
-  cat("Fitting model for metric:", metric, "\n")
 
-  formula = as.formula(paste(metric, "~ FWHM * Method + (1 | Subject)"))
-  model <- lmer(formula, data = metrics_data)
-
-  # Print the summary of the model
-  print(summary(model))
-
-  # Save the summary to a text file
-  model_summary_file <- file.path(output_dir, paste0(metric, "_connectivity_metrics_model_summary.txt"))
-  capture.output(summary(model), file = model_summary_file)
-
-  # Extract coefficients and confidence intervals
-  coef_summary <- summary(model)$coefficients
-  confint_result <- confint(model, method = "Wald")
-
-  # Extract FWHM effects for each method
-  # FWHM coefficient is the effect for gaussian (reference level)
-  beta_gaussian <- coef_summary["FWHM", "Estimate"]
-  pvalue_gaussian <- coef_summary["FWHM", "Pr(>|t|)"]
-  ci_gaussian <- confint_result["FWHM", ]
-
-  # FWHM:Methodconstrained is the additional effect for constrained
-  # Total effect for constrained = FWHM + FWHM:Methodconstrained
-  beta_interaction <- coef_summary["FWHM:Methodconstrained", "Estimate"]
-  beta_constrained <- beta_gaussian + beta_interaction
-  pvalue_constrained <- coef_summary["FWHM:Methodconstrained", "Pr(>|t|)"]
-  ci_interaction <- confint_result["FWHM:Methodconstrained", ]
-  ci_constrained <- ci_gaussian + ci_interaction
-
-  # Add to results table
-  results_table <- rbind(results_table, data.frame(
-    Metric = metric,
-    BetaGaussian = beta_gaussian,
-    BetaGaussianCILow = ci_gaussian[1],
-    BetaGaussianCIHigh = ci_gaussian[2],
-    PvalueGaussian = pvalue_gaussian,
-    BetaConstrained = beta_constrained,
-    BetaConstrainedCILow = ci_constrained[1],
-    BetaConstrainedCIHigh = ci_constrained[2],
-    PvalueConstrained = pvalue_constrained
-  ))
-}
-
-# Save results table
-results_file <- file.path(output_dir, "connectivity_metrics_results_table.csv")
-write.csv(results_table, results_file, row.names = FALSE)
-print(results_table)
-
-# Load required library
-library(ggplot2)
-
-# Reshape the data for visualization
-results_long <- results_table %>%
+# Gather data for plotting
+plot_data <- metrics_data %>%
+  select(Subject, Method, FWHM, all_of(metrics)) %>%
   tidyr::pivot_longer(
-    cols = c(starts_with("BetaGaussian"), starts_with("BetaConstrained")),
-    names_to = c("Method", ".value"),
-    names_pattern = "Beta(Gaussian|Constrained)(.*)"
-  ) %>%
-  rename(Estimate = "", CILow = "CILow", CIHigh = "CIHigh")
+    cols = all_of(metrics),
+    names_to = "Metric",
+    values_to = "Value"
+  )
 
-# Create the plot
-plot <- ggplot(results_long, aes(x = Metric, y = Estimate, color = Method)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  geom_errorbar(aes(ymin = CILow, ymax = CIHigh), width = 0.2, position = position_dodge(width = 0.5)) +
+# Create boxplots for each metric in one figure
+boxplot_figure <- ggplot(plot_data, aes(x = FWHM, y = Value, fill = Method)) +
+  geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+  facet_wrap(~ Metric, scales = "free_y") +
   theme_minimal() +
   labs(
-    title = "Beta Estimates with Confidence Intervals",
-    x = "Metric",
-    y = "Beta Estimate",
-    color = "Method"
+    title = "Metric Values by Smoothing Condition",
+    x = "Smoothing FWHM",
+    y = "Metric Value",
+    fill = "Method"
   ) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
 
-# Save the plot
-ggsave(file.path(output_dir, "results_visualization.pdf"), plot, width = 8, height = 5)
+ggsave(file.path(output_dir, "metrics_boxplots.pdf"), boxplot_figure, width = 12, height = 8)
+
+# --- T-tests comparing smoothing conditions ---
+
+ttest_results <- tibble(
+  Metric = character(),
+  FWHM = character(),
+  Comparison = character(),
+  t_statistic = numeric(),
+  p_value = numeric()
+)
+
+for (metric in metrics) {
+  for (fwhm in metrics_levels) {
+    # Compare methods at each FWHM
+    vals_gaussian <- metrics_data %>% filter(FWHM == fwhm, Method == "gaussian") %>% pull(metric)
+    vals_constrained <- metrics_data %>% filter(FWHM == fwhm, Method == "constrained") %>% pull(metric)
+    if (length(vals_gaussian) > 1 && length(vals_constrained) > 1) {
+      ttest <- t.test(vals_gaussian, vals_constrained)
+      ttest_results <- add_row(ttest_results,
+        Metric = metric,
+        FWHM = fwhm,
+        Comparison = "gaussian_vs_constrained",
+        t_statistic = ttest$statistic,
+        p_value = ttest$p.value
+      )
+    }
+    # Compare each method at FWHM vs no smoothing (FWHM=0)
+    if (fwhm != "0") {
+      for (method in c("gaussian", "constrained")) {
+        vals_fwhm <- metrics_data %>% filter(FWHM == fwhm, Method == method) %>% pull(metric)
+        vals_nosmooth <- metrics_data %>% filter(FWHM == "0", Method == method) %>% pull(metric)
+        if (length(vals_fwhm) > 1 && length(vals_nosmooth) > 1) {
+          ttest <- t.test(vals_fwhm, vals_nosmooth)
+          ttest_results <- add_row(ttest_results,
+            Metric = metric,
+            FWHM = fwhm,
+            Comparison = paste0(method, "_vs_nosmoothing"),
+            t_statistic = ttest$statistic,
+            p_value = ttest$p.value
+          )
+        }
+      }
+    }
+  }
+}
+
+# Save t-test results table
+ttest_file <- file.path(output_dir, "smoothing_ttest_results.csv")
+write.csv(ttest_results, ttest_file, row.names = FALSE)
+print(ttest_results)

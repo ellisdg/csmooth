@@ -106,26 +106,20 @@ def append_data(data, subject, method, fwhm, distance_values, connectivity_value
     return data
 
 
-def process_subject(subject_dir, distance_values, network_communities, graph_density):
-    """Process a single subject and return metrics and data."""
+def process_subject_connectivity_distance(subject_dir, distance_values):
+    """Process a single subject and return connectivity-distance data."""
     subject_name = os.path.basename(subject_dir)
     subject_data = []
-    subject_metrics = []
-    
+
     # Process no smoothing
     ns_filename = os.path.join(subject_dir, "func",
                                f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_no_smoothing_fwhm-0_connectivity.npy")
     ns_matrix = np.load(ns_filename)
-    ns_graph_metrics = compute_graph_metrics(compute_adjacency_matrix(ns_matrix, graph_density=graph_density), communities=network_communities)
-    subject_metrics.append((subject_name, "gaussian", 0, graph_density, *ns_graph_metrics))
-    subject_metrics.append((subject_name, "constrained", 0, graph_density, *ns_graph_metrics))
-    
     triu_indices = np.triu_indices_from(ns_matrix, k=1)
     ns_values = ns_matrix.astype(np.float32)[triu_indices]
-    
+
     # append no smoothing values twice, once for each method
-    subject_data = append_data(subject_data, subject_name, "gaussian", 0, distance_values, ns_values)
-    subject_data = append_data(subject_data, subject_name, "constrained", 0, distance_values, ns_values)
+    subject_data = append_data(subject_data, subject_name, "NoSmoothing", 0, distance_values, ns_values)
     del ns_values, ns_matrix
 
     # Process different FWHM values
@@ -133,22 +127,50 @@ def process_subject(subject_dir, distance_values, network_communities, graph_den
         cs_filename = os.path.join(subject_dir, "func",
                                    f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_csmooth_fwhm-{fwhm}_connectivity.npy")
         cs_matrix = np.load(cs_filename)
-        subject_metrics.append((subject_name, "constrained", fwhm, graph_density,
-                        *compute_graph_metrics(compute_adjacency_matrix(cs_matrix, graph_density=graph_density), communities=network_communities)))
         cs_values = cs_matrix[triu_indices].astype(np.float32)
-        subject_data = append_data(subject_data, subject_name, "constrained", fwhm, distance_values, cs_values)
+        subject_data = append_data(subject_data, subject_name, "Constrained", fwhm, distance_values, cs_values)
         del cs_values, cs_matrix
-        
+
         gs_filename = os.path.join(subject_dir, "func",
                                    f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_gaussian_fwhm-{fwhm}_connectivity.npy")
         gs_matrix = np.load(gs_filename)
-        subject_metrics.append((subject_name, "gaussian", fwhm, graph_density,
-                        *compute_graph_metrics(compute_adjacency_matrix(gs_matrix, graph_density=graph_density), communities=network_communities)))
         gs_values = gs_matrix[triu_indices].astype(np.float32)
-        subject_data = append_data(subject_data, subject_name, "gaussian", fwhm, distance_values, gs_values)
+        subject_data = append_data(subject_data, subject_name, "Gaussian", fwhm, distance_values, gs_values)
         del gs_values, gs_matrix
-    
-    return subject_data, subject_metrics
+
+    return subject_data
+
+
+def process_subject_metrics(subject_dir, graph_density, network_communities):
+    """Process a single subject and return graph metrics."""
+    subject_name = os.path.basename(subject_dir)
+    subject_metrics = []
+
+    # Process no smoothing
+    ns_filename = os.path.join(subject_dir, "func",
+                               f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_no_smoothing_fwhm-0_connectivity.npy")
+    ns_matrix = np.load(ns_filename)
+    ns_graph_metrics = compute_graph_metrics(compute_adjacency_matrix(ns_matrix, graph_density=graph_density), communities=network_communities)
+    subject_metrics.append((subject_name, "NoSmoothing", 0, graph_density, *ns_graph_metrics))
+    del ns_matrix
+
+    # Process different FWHM values
+    for fwhm in (3, 6, 9, 12):
+        cs_filename = os.path.join(subject_dir, "func",
+                                   f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_csmooth_fwhm-{fwhm}_connectivity.npy")
+        cs_matrix = np.load(cs_filename)
+        subject_metrics.append((subject_name, "Constrained", fwhm, graph_density,
+                        *compute_graph_metrics(compute_adjacency_matrix(cs_matrix, graph_density=graph_density), communities=network_communities)))
+        del cs_matrix
+
+        gs_filename = os.path.join(subject_dir, "func",
+                                   f"{subject_name}_space-MNI152NLin2009cAsym_desc-Schaefer20181000Parcels7Networks_gaussian_fwhm-{fwhm}_connectivity.npy")
+        gs_matrix = np.load(gs_filename)
+        subject_metrics.append((subject_name, "Gaussian", fwhm, graph_density,
+                        *compute_graph_metrics(compute_adjacency_matrix(gs_matrix, graph_density=graph_density), communities=network_communities)))
+        del gs_matrix
+
+    return subject_metrics
 
 
 def parse_args():
@@ -184,39 +206,49 @@ def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_d
     subject_dirs = sorted(glob.glob(os.path.join(connectivity_dir, "sub-*")))
     if n_subjects is not None:
         subject_dirs = subject_dirs[:n_subjects]
-    
-    # Use multiprocessing to process subjects
-    print(f"Processing {len(subject_dirs)} subjects using {cpu_count()} CPU cores...")
-    process_func = partial(process_subject, 
-                          distance_values=distance_values, 
-                          network_communities=network_communities, 
-                          graph_density=graph_density)
-    
-    data = []
-    metrics = []
-    
-    with Pool() as pool:
-        results = list(tqdm(pool.imap(process_func, subject_dirs), 
-                           total=len(subject_dirs), 
-                           desc="Processing subjects", 
-                           unit="subject"))
-    
-    # Collect results
-    for subject_data, subject_metrics in results:
-        data.extend(subject_data)
-        metrics.extend(subject_metrics)
-    
-    metrics_df = pd.DataFrame(metrics,
-                              columns=["Subject", "Method", "FWHM", "GraphDensity",
-                                       "LocalEfficiency", "GlobalEfficiency", "ClusteringCoefficient", "Modularity"])
-    print("Graph metrics data points:", len(metrics_df))
-    metrics_df.to_csv(output_metrics,
-                      index=False)
-    del metrics_df, metrics
-    conn_distance_df = pd.DataFrame(data, columns=["Subject", "Method", "FWHM", "Distance_mm", "FisherZ_Connectivity"])
-    print("Total data points:", len(conn_distance_df))
-    conn_distance_df.to_parquet(output_data,
-                                index=False)
+
+    if not os.path.exists(output_data):
+        print(f"Processing {len(subject_dirs)} subjects for connectivity-distance data using {cpu_count()} CPU cores...")
+        process_func = partial(process_subject_connectivity_distance, distance_values=distance_values)
+        data = []
+        with Pool() as pool:
+            results = list(tqdm(pool.imap(process_func, subject_dirs),
+                               total=len(subject_dirs),
+                               desc="Processing subjects",
+                               unit="subject"))
+        for subject_data in results:
+            data.extend(subject_data)
+        conn_distance_df = pd.DataFrame(data, columns=["Subject", "Method", "FWHM", "Distance_mm", "FisherZ_Connectivity"])
+        print("Total data points:", len(conn_distance_df))
+        conn_distance_df.to_parquet(output_data,
+                                    index=False)
+        print(f"Saved connectivity-distance data to {output_data}")
+        del conn_distance_df, data
+    else:
+        print(f"Output data file {output_data} already exists. Skipping connectivity-distance data processing.")
+
+    if not os.path.exists(output_metrics):
+        print(f"Processing {len(subject_dirs)} subjects for graph metrics using {cpu_count()} CPU cores...")
+        process_func = partial(process_subject_metrics, graph_density=graph_density, network_communities=network_communities)
+        metrics = []
+        with Pool() as pool:
+            results = list(tqdm(pool.imap(process_func, subject_dirs),
+                               total=len(subject_dirs),
+                               desc="Processing subjects",
+                               unit="subject"))
+        for subject_metrics in results:
+            metrics.extend(subject_metrics)
+        metrics_df = pd.DataFrame(metrics,
+                                  columns=["Subject", "Method", "FWHM", "GraphDensity",
+                                           "LocalEfficiency", "GlobalEfficiency", "ClusteringCoefficient", "Modularity"])
+        print("Graph metrics data points:", len(metrics_df))
+        metrics_df.to_csv(output_metrics,
+                          index=False)
+        print(f"Saved graph metrics to {output_metrics}")
+        del metrics_df, metrics
+    else:
+        print(f"Output metrics file {output_metrics} already exists. Skipping graph metrics processing.")
+
     print("Done.")
 
 
