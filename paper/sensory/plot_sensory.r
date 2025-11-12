@@ -20,6 +20,7 @@ suppressPackageStartupMessages({
   library(e1071)   # for skewness
   library(purrr)
   library(tibble)
+  library(RColorBrewer)  # added for brewer.pal used in forest plots
 })
 
 #---------------------------------------------------------------------
@@ -72,6 +73,28 @@ df <- df %>%
   ) %>%
   filter(!is.na(n_active), !is.na(fwhm))
 
+rois <- intersect(c("gm", "wm", "rh_precentral", "rh_postcentral"),
+                  unique(df$region))
+
+# filter to only these ROIs
+df <- df %>% filter(region %in% rois)
+
+# Map ROI codes to display names once and update 'rois' to use the display names
+# This centralizes region renaming so we don't repeat it before every plot.
+display_map <- c(
+  "rh_postcentral" = "RH Postcentral",
+  "rh_precentral" = "RH Precentral",
+  "gm" = "GM",
+  "wm" = "WM"
+)
+
+# Update the 'rois' vector to the mapped (display) names for downstream use
+rois <- unname(display_map[rois])
+
+# Replace region codes in the main dataframe with display names and set a consistent factor ordering
+df <- df %>%
+  mutate(region = as.character(display_map[region])) %>%
+  mutate(region = factor(region, levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
 
 #---------------------------------------------------------------------
 # Histograms: number of active voxels by region
@@ -82,12 +105,12 @@ df <- df %>%
 p_hist <- df %>%
   ggplot(aes(x = n_active)) +
   geom_histogram(bins = 30, color = "white", fill = "#2c7fb8") +
-  facet_wrap(~ region, scales = "free_x") +
+  facet_wrap(~ region, scales = "free_x", ncol = 4) +
   labs(x = "Number of active voxels", y = "Count") +
   theme_minimal(base_size = 12)
 
 ggsave(filename = file.path(out_dir, "hist_by_region.pdf"),
-       plot = p_hist, width = 14, height = 10)
+       plot = p_hist, width = 8, height = 4)
 
 #---------------------------------------------------------------------
 # Summary stats: mean, sd, skew by region
@@ -117,8 +140,7 @@ print(summary_tbl)
 # - We will extract both slope estimates (effect of fwhm) and intercepts for
 #   Gaussian (reference) and Constrained (reference + method effect)
 #---------------------------------------------------------------------
-rois <- intersect(c("gm", "wm", "rh_precentral", "rh_postcentral"),
-                  unique(df$region))
+
 
 if (length(rois) == 0) {
   stop("No expected ROIs found among regions. Regions present: ",
@@ -156,8 +178,6 @@ fit_one_roi <- function(dat_roi) {
     data = dat_roi
   )
   
-  print(summary(m))
-
   # Extract fixed effects and covariance
   beta <- fixef(m)$cond
   V    <- as.matrix(vcov(m)$cond)
@@ -170,9 +190,6 @@ fit_one_roi <- function(dat_roi) {
   } else {
     c_slope <- g_slope
   }
-  
-  print(g_slope)
-  print(c_slope)
 
   # Compute intercepts: Gaussian intercept is '(Intercept)'
   g_intercept <- lincom(beta, V, c("(Intercept)" = 1.0))
@@ -182,9 +199,6 @@ fit_one_roi <- function(dat_roi) {
   } else {
     c_intercept <- g_intercept
   }
-  
-  print(g_intercept)
-  print(c_intercept)
 
   tibble::tibble(
     region = dat_roi$region[1],
@@ -225,8 +239,7 @@ print(glmm_results)
 # Forest plot: Gaussian vs Constrained smoothing slopes (per ROI)
 # - pivot so we have columns: region, method, slope, lwr, upr
 # - ensure names match the pattern '(Gaussian|Constrained)_(slope|lwr|upr)'
-# - map region codes to nicer display names and order them as requested
-# - color Gaussian blue and Constrained green
+# - minimal change: data already contains display names; only ensure ordering and transform to response scale
 #---------------------------------------------------------------------
 plot_df <- glmm_results %>%
   select(region,
@@ -235,34 +248,33 @@ plot_df <- glmm_results %>%
   pivot_longer(cols = -region,
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained)_(.*)") %>%
-  # Keep only the four regions we want to display, using their raw codes
-  filter(region %in% c("wm", "gm", "rh_precentral", "rh_postcentral")) %>%
+  # Keep only the display-name regions (rois variable already contains display names)
+  filter(region %in% rois) %>%
   # Standardize method labels and ensure ordering
   mutate(method = factor(method, levels = c("Gaussian", "Constrained"))) %>%
-  arrange(region, method)
+  arrange(region, method) %>%
+  # response-scale transformations for slopes
+  mutate(slope_rr = exp(slope), lwr_rr = exp(lwr), upr_rr = exp(upr)) %>%
+  # enforce the same region factor ordering as df/glmm_results
+  mutate(region = factor(as.character(region), levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
 
-# Map region codes to requested display names and order
-plot_df <- plot_df %>%
-  mutate(region = case_when(
-    region == "rh_postcentral" ~ "RH Postcentral",
-    region == "rh_precentral" ~ "RH Precentral",
-    region == "gm" ~ "GM",
-    region == "wm" ~ "WM",
-    TRUE ~ as.character(region)
-  )) %>%
-  mutate(region = factor(region, levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
-
-# Create slope forest plot with specified colors (dodge side-by-side)
-p_forest <- ggplot(plot_df, aes(x = slope, y = region, color = method, shape = method)) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+# Create slope forest plot with specified colors (dodge side-by-side) on response scale
+p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape = method)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +  # null rate ratio at 1
   geom_point(position = position_dodge(width = 0.5), size = 2) +
-  geom_errorbar(aes(xmin = lwr, xmax = upr),
+  geom_errorbar(aes(xmin = lwr_rr, xmax = upr_rr),
                 position = position_dodge(width = 0.5), width = 0.2) +
   scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2], "Constrained" = brewer.pal(3, "Set1")[3]),
                      breaks = c("Gaussian", "Constrained")) +
   scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
                      breaks = c("Gaussian", "Constrained")) +
-  labs(x = "Estimated slope\n(change in active voxels per 1 mm FWHM)",
+  # Ensure a tick at 1 by adding it to pretty breaks
+  scale_x_continuous(breaks = function(x) {
+    rng <- range(x, na.rm = TRUE)
+    base <- pretty(rng)
+    sort(unique(c(base, 1)))
+  }) +
+  labs(x = "Incidence Rate Ratio per 1 mm FWHM",
        y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
@@ -278,34 +290,26 @@ intercept_df <- glmm_results %>%
   pivot_longer(cols = -region,
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained)_(.*)") %>%
-  # Keep only the four regions we want to display
-  filter(region %in% c("rh_postcentral", "rh_precentral", "gm", "wm")) %>%
+  # Keep only the display-name regions
+  filter(region %in% rois) %>%
   # rename the estimate column to 'intercept' for clarity (pivot_longer created 'intercept')
   rename(intercept = intercept) %>%
-  mutate(method = factor(method, levels = c("Gaussian", "Constrained")))
+  mutate(method = factor(method, levels = c("Gaussian", "Constrained"))) %>%
+  # response-scale transformations for intercepts
+  mutate(intercept_resp = exp(intercept), lwr_resp = exp(lwr), upr_resp = exp(upr)) %>%
+  # enforce display-name region ordering
+  mutate(region = factor(as.character(region), levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
 
-# Map region display names and order to match slopes plot
-intercept_df <- intercept_df %>%
-  mutate(region = case_when(
-    region == "rh_postcentral" ~ "RH Postcentral",
-    region == "rh_precentral" ~ "RH Precentral",
-    region == "gm" ~ "GM",
-    region == "wm" ~ "WM",
-    TRUE ~ as.character(region)
-  )) %>%
-  mutate(region = factor(region, levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
-
-# Plot intercepts (dodge side-by-side)
-p_forest_intercept <- ggplot(intercept_df, aes(x = intercept, y = region, color = method, shape = method)) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+# Plot intercepts (dodge side-by-side) on response scale (remove null line at 0)
+p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, color = method, shape = method)) +
   geom_point(position = position_dodge(width = 0.5), size = 2) +
-  geom_errorbar(aes(xmin = lwr, xmax = upr),
+  geom_errorbar(aes(xmin = lwr_resp, xmax = upr_resp),
                 position = position_dodge(width = 0.5), width = 0.2) +
   scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2], "Constrained" = brewer.pal(3, "Set1")[3]),
                      breaks = c("Gaussian", "Constrained")) +
   scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
                      breaks = c("Gaussian", "Constrained")) +
-  labs(x = "Estimated intercept (conditional link scale)",
+  labs(x = "Expected count at baseline (response scale)",
        y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
