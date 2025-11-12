@@ -94,7 +94,8 @@ rois <- unname(display_map[rois])
 # Replace region codes in the main dataframe with display names and set a consistent factor ordering
 df <- df %>%
   mutate(region = as.character(display_map[region])) %>%
-  mutate(region = factor(region, levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
+  # Set ordering so RH Postcentral appears on top in plots by placing it last
+  mutate(region = factor(region, levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
 
 #---------------------------------------------------------------------
 # Histograms: number of active voxels by region
@@ -256,7 +257,7 @@ plot_df <- glmm_results %>%
   # response-scale transformations for slopes
   mutate(slope_rr = exp(slope), lwr_rr = exp(lwr), upr_rr = exp(upr)) %>%
   # enforce the same region factor ordering as df/glmm_results
-  mutate(region = factor(as.character(region), levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
+  mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
 
 # Create slope forest plot with specified colors (dodge side-by-side) on response scale
 p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape = method)) +
@@ -298,7 +299,7 @@ intercept_df <- glmm_results %>%
   # response-scale transformations for intercepts
   mutate(intercept_resp = exp(intercept), lwr_resp = exp(lwr), upr_resp = exp(upr)) %>%
   # enforce display-name region ordering
-  mutate(region = factor(as.character(region), levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
+  mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
 
 # Plot intercepts (dodge side-by-side) on response scale (remove null line at 0)
 p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, color = method, shape = method)) +
@@ -309,7 +310,9 @@ p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, c
                      breaks = c("Gaussian", "Constrained")) +
   scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
                      breaks = c("Gaussian", "Constrained")) +
-  labs(x = "Expected count at baseline (response scale)",
+  # Ensure x-axis lower limit is 0 (counts cannot be negative)
+  scale_x_continuous(limits = c(0, NA)) +
+  labs(x = "Expected count at baseline",
        y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
