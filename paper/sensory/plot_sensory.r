@@ -312,7 +312,7 @@ p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, c
                      breaks = c("Gaussian", "Constrained")) +
   # Ensure x-axis lower limit is 0 (counts cannot be negative)
   scale_x_continuous(limits = c(0, NA)) +
-  labs(x = "Expected count at baseline",
+  labs(x = "Expected Count at Baseline",
        y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
