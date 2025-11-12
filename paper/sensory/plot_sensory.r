@@ -319,6 +319,6 @@ p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, c
 
 # Save PDF versions of both forest plots
 ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot.pdf"),
-       plot = p_forest, width = 10, height = 6)
+       plot = p_forest, width = 6, height = 4)
 ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_forest_plot.pdf"),
-       plot = p_forest_intercept, width = 10, height = 6)
+       plot = p_forest_intercept, width = 6, height = 4)
