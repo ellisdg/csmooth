@@ -155,6 +155,8 @@ fit_one_roi <- function(dat_roi) {
     family = nbinom2(),
     data = dat_roi
   )
+  
+  print(summary(m))
 
   # Extract fixed effects and covariance
   beta <- fixef(m)$cond
@@ -168,6 +170,9 @@ fit_one_roi <- function(dat_roi) {
   } else {
     c_slope <- g_slope
   }
+  
+  print(g_slope)
+  print(c_slope)
 
   # Compute intercepts: Gaussian intercept is '(Intercept)'
   g_intercept <- lincom(beta, V, c("(Intercept)" = 1.0))
@@ -177,6 +182,9 @@ fit_one_roi <- function(dat_roi) {
   } else {
     c_intercept <- g_intercept
   }
+  
+  print(g_intercept)
+  print(c_intercept)
 
   tibble::tibble(
     region = dat_roi$region[1],
@@ -228,7 +236,7 @@ plot_df <- glmm_results %>%
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained)_(.*)") %>%
   # Keep only the four regions we want to display, using their raw codes
-  filter(region %in% c("rh_postcentral", "rh_precentral", "gm", "wm")) %>%
+  filter(region %in% c("wm", "gm", "rh_precentral", "rh_postcentral")) %>%
   # Standardize method labels and ensure ordering
   mutate(method = factor(method, levels = c("Gaussian", "Constrained"))) %>%
   arrange(region, method)
@@ -242,7 +250,7 @@ plot_df <- plot_df %>%
     region == "wm" ~ "WM",
     TRUE ~ as.character(region)
   )) %>%
-  mutate(region = factor(region, levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
+  mutate(region = factor(region, levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
 
 # Create slope forest plot with specified colors (dodge side-by-side)
 p_forest <- ggplot(plot_df, aes(x = slope, y = region, color = method, shape = method)) +
@@ -250,17 +258,13 @@ p_forest <- ggplot(plot_df, aes(x = slope, y = region, color = method, shape = m
   geom_point(position = position_dodge(width = 0.5), size = 2) +
   geom_errorbar(aes(xmin = lwr, xmax = upr),
                 position = position_dodge(width = 0.5), width = 0.2) +
-  scale_color_manual(values = c("Gaussian" = "blue", "Constrained" = "green"),
+  scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2], "Constrained" = brewer.pal(3, "Set1")[3]),
                      breaks = c("Gaussian", "Constrained")) +
   scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
                      breaks = c("Gaussian", "Constrained")) +
-  labs(x = "Estimated slope (change in active voxels per 1 mm FWHM)",
-       y = NULL, color = "Method", shape = "Method",
-       title = "Effect of smoothing (FWHM) on active voxel counts by ROI\nNB-GLMM with random intercepts for subject and run") +
+  labs(x = "Estimated slope\n(change in active voxels per 1 mm FWHM)",
+       y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
-
-ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot.png"),
-       plot = p_forest, width = 10, height = 6, dpi = 300)
 
 #---------------------------------------------------------------------
 # Forest plot for intercepts (constant terms)
@@ -289,7 +293,7 @@ intercept_df <- intercept_df %>%
     region == "wm" ~ "WM",
     TRUE ~ as.character(region)
   )) %>%
-  mutate(region = factor(region, levels = c("RH Postcentral", "RH Precentral", "GM", "WM")))
+  mutate(region = factor(region, levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
 
 # Plot intercepts (dodge side-by-side)
 p_forest_intercept <- ggplot(intercept_df, aes(x = intercept, y = region, color = method, shape = method)) +
@@ -297,18 +301,14 @@ p_forest_intercept <- ggplot(intercept_df, aes(x = intercept, y = region, color 
   geom_point(position = position_dodge(width = 0.5), size = 2) +
   geom_errorbar(aes(xmin = lwr, xmax = upr),
                 position = position_dodge(width = 0.5), width = 0.2) +
-  scale_color_manual(values = c("Gaussian" = "blue", "Constrained" = "green"),
+  scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2], "Constrained" = brewer.pal(3, "Set1")[3]),
                      breaks = c("Gaussian", "Constrained")) +
   scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
                      breaks = c("Gaussian", "Constrained")) +
   labs(x = "Estimated intercept (conditional link scale)",
-       y = NULL, color = "Method", shape = "Method",
-       title = "Intercepts from NB-GLMM by ROI (Gaussian vs Constrained)") +
+       y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
-# Save intercept forest plot
-ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_forest_plot.png"),
-       plot = p_forest_intercept, width = 10, height = 6, dpi = 300)
 
 # Save PDF versions of both forest plots
 ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot.pdf"),
