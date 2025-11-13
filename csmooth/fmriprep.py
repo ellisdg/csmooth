@@ -281,12 +281,6 @@ def main():
                                  output_to_mni=output_to_mni)
 
 
-
-
-if __name__ == "__main__":
-    main()
-
-
 def add_parameter_args(parser):
     parser.add_argument("--tau", type=float,
                         help="Tau value for heat kernel smoothing. Either --tau or --fwhm must be provided.")
@@ -318,3 +312,7 @@ def add_parameter_args(parser):
     parser.add_argument("--debug", action='store_true',
                         help="If set, enable debug logging. Default is to use info level logging.")
     return parser
+
+
+if __name__ == "__main__":
+    main()
