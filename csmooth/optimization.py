@@ -101,6 +101,9 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
             gradient = current_fwhm - fwhm
             previous_tau = tau
             tau -= learning_rate * gradient
+            if tau <= 0:
+                logger.info(f"Tau became non-positive. Reducing tau to half of previous value.")
+                tau = previous_tau / 2
             learning_rate *= decay_rate
             patience = initial_patience  # reset patience if we made progress
 
