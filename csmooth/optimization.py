@@ -59,7 +59,6 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
     random_noise = np.random.randn(*shape)
     mae = np.inf
     current_fwhm = np.nan
-    previous_tau = tau
     best_tau = tau
     best_mae = np.inf
     best_fwhm = current_fwhm
@@ -78,15 +77,16 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
         if mae < stop_threshold:
             break
         if i == max_iterations - 1:
-            if mae > previous_mae:
-                tau = previous_tau
-                current_fwhm = estimate_fwhm(edge_src=edge_src, edge_dst=edge_dst,
-                                                edge_distances=edge_distances, signal_data=smoothed_noise)
-            logger.warning(f"Maximum iterations reached ({max_iterations}). "
-                            f"Current fwhm: {current_fwhm:.2f}, target fwhm: {fwhm:.2f}, "
-                            f"tau: {tau:.2f}.")
+            logger.warning(f"Maximum iterations reached ({max_iterations}). ")
             break
-        if mae > previous_mae:
+
+        gradient = current_fwhm - fwhm
+        previous_tau = tau
+        tau -= learning_rate * gradient
+        if tau <= 0:
+            logger.info(f"Tau became non-positive. Reducing tau to half of previous value.")
+            tau = previous_tau / 2
+        elif mae > previous_mae:
             logger.warning(f"MAE increased from {previous_mae:.4f} to {mae:.4f}.")
             patience -= 1
             if patience <= 0:
@@ -96,12 +96,6 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
                 logger.warning(f"Continuing gradient descent with reduced learning rate.")
             learning_rate /= 2
         else:
-            gradient = current_fwhm - fwhm
-            previous_tau = tau
-            tau -= learning_rate * gradient
-            if tau <= 0:
-                logger.info(f"Tau became non-positive. Reducing tau to half of previous value.")
-                tau = previous_tau / 2
             learning_rate *= decay_rate
             patience = initial_patience  # reset patience if we made progress
 
