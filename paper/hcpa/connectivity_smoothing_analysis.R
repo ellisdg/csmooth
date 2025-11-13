@@ -6,36 +6,60 @@ library(tidyr)
 library(readr)
 library(dplyr)
 library(tibble)
+library(RColorBrewer)
 
-# Read command-line arguments
-args <- commandArgs(trailingOnly = TRUE)
+# # Read command-line arguments
+# args <- commandArgs(trailingOnly = TRUE)
+# 
+# # Ensure two arguments are provided
+# if (length(args) != 2) {
+#   stop("Please provide exactly two file paths as arguments.")
+# }
+# 
+# # Assign arguments to variables
+# metrics_file <- args[1]
+# output_dir <- args[2]
+# 
+# # Print the file paths
+# cat("Graphy Connectivity Metrics Filename:", metrics_file, "\n")
+# cat("Output Directory:", output_dir, "\n")
 
-# Ensure two arguments are provided
-if (length(args) != 2) {
-  stop("Please provide exactly two file paths as arguments.")
-}
-
-# Assign arguments to variables
-metrics_file <- args[1]
-output_dir <- args[2]
-
-# Print the file paths
-cat("Graphy Connectivity Metrics Filename:", metrics_file, "\n")
-cat("Output Directory:", output_dir, "\n")
+metrics_file <- "~/Box Sync/Aizenberg_Documents/Papers/csmooth/results/conn_smoothing_graph_metrics.csv"
+output_dir <- "~/Box Sync/Aizenberg_Documents/Papers/csmooth/figures/hcpa_conn/"
 
 # read in the csv file
 metrics_data = read_csv(metrics_file)
 
 # --- Boxplots for each metric across smoothing conditions ---
 
+# In the Method column there is gaussian and constrained
+# However, when FWHM=0, there is no smoothing, so we will treat that as a separate condition
+# So, set FWHM=0 rows to Method="No Smoothing"
+# and ensure the Method factor levels are ordered as: No Smoothing, Gaussian, Constrained
+# Also ensure FWHM is treated as a factor for plotting purposes
+# Also, also remove duplicate rows, as some No Smoothing rows are duplicated
+metrics_data <- metrics_data %>%
+  mutate(
+    Method = if_else(FWHM == 0, "no smoothing", Method)
+  )
+
+# If there are duplicate rows (same Subject, Method, FWHM), keep only one
+metrics_data <- metrics_data %>%
+  distinct(Subject, Method, FWHM, .keep_all = TRUE)
+
+
 # Ensure FWHM=0 (no smoothing) is included
 metrics_data$FWHM <- as.factor(metrics_data$FWHM)
-metrics_data$Method <- factor(metrics_data$Method, levels = c("gaussian", "constrained"))
+metrics_data$Method <- factor(metrics_data$Method, levels = c("no smoothing", "gaussian", "constrained"))
 
 metrics_levels <- c("0", "3", "6", "9", "12")
 metrics_data$FWHM <- factor(metrics_data$FWHM, levels = metrics_levels)
 
-metrics = c("LocalEfficiency", "GlobalEfficiency", "ClusteringCoefficient", "Modularity")
+# Change column names to have a spaece for better plotting labels
+colnames(metrics_data) <- gsub("LocalEfficiency", "Local Efficiency", colnames(metrics_data))
+colnames(metrics_data) <- gsub("GlobalEfficiency", "Global Efficiency", colnames(metrics_data))
+colnames(metrics_data) <- gsub("ClusteringCoefficient", "Clustering Coefficient", colnames(metrics_data))
+metrics = c("Local Efficiency", "Global Efficiency", "Clustering Coefficient", "Modularity")
 
 # Gather data for plotting
 plot_data <- metrics_data %>%
@@ -48,18 +72,28 @@ plot_data <- metrics_data %>%
 
 # Create boxplots for each metric in one figure
 boxplot_figure <- ggplot(plot_data, aes(x = FWHM, y = Value, fill = Method)) +
-  geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
-  facet_wrap(~ Metric, scales = "free_y") +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  facet_wrap(~ Metric, scales = "free_y", nrow=1) +
   theme_minimal() +
   labs(
-    title = "Metric Values by Smoothing Condition",
-    x = "Smoothing FWHM",
+    x = "FWHM (mm)",
     y = "Metric Value",
-    fill = "Method"
+    fill = "Method:"
   ) +
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+  # force "no smoothing" = gray, + two colors from Set1
+  scale_fill_manual(values = c(
+    "no smoothing" = "gray80",
+    "gaussian"     = brewer.pal(3, "Set1")[2],
+    "constrained"  = brewer.pal(3, "Set1")[3]
+  )) +
+  theme(
+    strip.text = element_text(size = 10, face = "bold"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "bottom" # or "bottom"
+  )
+print(boxplot_figure)
 
-ggsave(file.path(output_dir, "metrics_boxplots.pdf"), boxplot_figure, width = 12, height = 8)
+ggsave(file.path(output_dir, "metrics_boxplots.pdf"), boxplot_figure, width = 8, height = 4)
 
 # --- T-tests comparing smoothing conditions ---
 

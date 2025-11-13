@@ -4,3 +4,5 @@ paper/*/*.pdf
 paper/*/*.png
 *.csv
 *.parquet
+.DS_Store
+
