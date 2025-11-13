@@ -1,37 +1,18 @@
 # ConstrainedSmoothing
 
-Detailed description of your project.
+ConstrainedSmoothing (csmooth) performs anatomically informed smoothing of fMRIPrep preprocessed BOLD images using cortical surface + volume constraints.
 
-## Installation
+## Quickstart (Docker in 3 commands)
 
-### Docker (Recommended)
+You only need Docker installed. The image `ellisdg/csmooth` will be pulled automatically if not present.
 
-The easiest way to use csmooth is via Docker. Pull the pre-built image:
-
-```bash
-docker pull ellisdg/csmooth
-```
-
-### Local Installation
-
-Install the package using pip:
-
-```bash
-pip install -e .
-```
-
-Or install from the requirements file:
-
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
-
-## Usage
-
-### Running with Docker (Recommended)
-
-To process fMRIPrep outputs with Docker:
+1. Create (or identify) two directories:
+   - `/path/to/fmriprep` (fMRIPrep derivatives containing sub-*/ folders)
+   - `/path/to/output` (will be created if it doesn't exist)
+2. Pick a smoothing parameter (choose one):
+   - FWHM in mm: `--fwhm 6.0`
+   - OR heat kernel tau in seconds: `--tau 100`
+3. Run (all subjects):
 
 ```bash
 docker run -v /path/to/fmriprep:/data/fmriprep \
@@ -39,58 +20,146 @@ docker run -v /path/to/fmriprep:/data/fmriprep \
            ellisdg/csmooth \
            /data/fmriprep \
            /data/output \
+           --fwhm 6.0
+```
+
+Single subject (e.g. sub-01):
+
+```bash
+docker run -v /path/to/fmriprep:/data/fmriprep \
+           -v /path/to/output:/data/output \
+           ellisdg/csmooth \
+           /data/fmriprep \
+           /data/output \
+           --subject 01 \
+           --fwhm 6.0
+```
+
+Outputs will appear under `/path/to/output/sub-01/func/` with filenames like: `sub-01_task-*_space-T1w_desc-csmooth_fwhm-6_bold.nii.gz` (format may include decimals if needed).
+
+Need MNI output?
+
+```bash
+docker run -v /path/to/fmriprep:/data/fmriprep \
+           -v /path/to/output:/data/output \
+           ellisdg/csmooth \
+           /data/fmriprep \
+           /data/output \
+           --subject 01 \
            --fwhm 6.0 \
-           --subject <subject_id>
+           --output_to_mni
 ```
 
-**Required Arguments:**
-- First positional: Path to fMRIPrep derivatives directory
-- Second positional: Path to output directory
+That's it for most users. See below for advanced options.
 
-**Smoothing Parameters (one required):**
-- `--fwhm`: Target smoothing kernel FWHM in mm (mutually exclusive with `--tau`)
-- `--tau`: Smoothing parameter in seconds (mutually exclusive with `--fwhm`)
+---
+## Advanced Docker Usage
 
-**Optional Arguments:**
-- `--subject`: Specific subject ID to process (e.g., `01` for `sub-01`). If not provided, processes all subjects
-- `--bold_files`: List of custom BOLD files in T1w space (requires `--subject`)
-- `--output_to_mni`: Resample outputs to MNI space
-- `--mask_dilation`: Number of voxels to dilate the mask (default: 3)
-- `--voxel_size`: Isotropic voxel size for resampling in mm (default: 1.0)
-- `--no_resample`: Skip resampling step
-- `--multiproc`: Number of parallel processes (default: 4)
-- `--overwrite`: Overwrite existing output files
-- `--low_mem`: Use low memory mode (process timepoints separately)
-- `--debug`: Enable debug logging
+You can customize processing with the optional flags below.
 
-### Running Locally
-
-After installing the package, you can run the fMRIPrep processing script directly:
+Common additions:
 
 ```bash
-python -m csmooth.fmriprep \
-    /path/to/fmriprep \
-    /path/to/output \
-    --fwhm 6.0 \
-    --subject <subject_id>
+docker run -v /path/to/fmriprep:/data/fmriprep \
+           -v /path/to/output:/data/output \
+           ellisdg/csmooth \
+           /data/fmriprep \
+           /data/output \
+           --subject 01 \
+           --tau 120 \
+           --voxel_size 1.0 \
+           --mask_dilation 3 \
+           --multiproc 8 \
+           --overwrite
 ```
 
-Or use the same script directly:
+Use custom BOLD files (must be T1w space and include `space-T1w` in name):
 
 ```bash
-python csmooth/fmriprep.py \
-    /path/to/fmriprep \
-    /path/to/output \
+docker run -v /path/to/fmriprep:/data/fmriprep \
+           -v /path/to/custom_bold:/data/custom \
+           -v /path/to/output:/data/output \
+           ellisdg/csmooth \
+           /data/fmriprep \
+           /data/output \
+           --subject 01 \
+           --bold_files /data/custom/sub-01_task-rest_space-T1w_desc-preproc_bold.nii.gz \
+           --fwhm 6.0
+```
+
+Low memory mode (process timepoints individually): add `--low_mem`.
+Disable resampling (use native BOLD voxel grid): add `--no_resample` (then `--voxel_size` is ignored).
+
+---
+## Command Line Arguments (Summary)
+
+Required positional:
+- fMRIPrep derivatives directory
+- Output directory
+
+Exactly one of:
+- `--fwhm <float>`  Gaussian target FWHM in mm
+- `--tau <float>`   Heat kernel tau in seconds
+
+Optional modifiers:
+- `--subject <ID>` Only that subject (e.g. 01 for sub-01). If omitted, all `sub-*` directories processed
+- `--bold_files <paths...>` Custom input BOLD(s) in T1w space (requires `--subject`)
+- `--output_to_mni` Resample outputs to MNI152NLin2009cAsym using fMRIPrep transform
+- `--mask_dilation <int>` Voxels to dilate mask (default 3)
+- `--voxel_size <float>` Isotropic resample size prior to smoothing (default 1.0 mm)
+- `--no_resample` Skip resampling entirely
+- `--multiproc <int>` Parallel workers (default 4)
+- `--overwrite` Replace existing output files
+- `--low_mem` Lower memory usage (slower)
+- `--debug` Verbose logging
+
+Edge conditions handled:
+- Existing outputs skipped unless `--overwrite`
+- Duplicate output filenames will raise an error
+- Missing required fMRIPrep files produce clear exceptions
+
+---
+## Local Installation (For Development or Custom Pipelines)
+
+Install (editable):
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+Run CLI exactly as Docker entrypoint does:
+
+```bash
+python -m csmooth.fmriprep /path/to/fmriprep /path/to/output --fwhm 6.0
+```
+
+Single subject, tau smoothing, MNI output:
+
+```bash
+python -m csmooth.fmriprep /path/to/fmriprep /path/to/output --subject 01 --tau 100 --output_to_mni
+```
+
+Custom BOLD files:
+
+```bash
+python -m csmooth.fmriprep /path/to/fmriprep /path/to/output --subject 01 \
+    --bold_files /path/to/custom/sub-01_task-rest_space-T1w_desc-preproc_bold.nii.gz \
     --fwhm 6.0
 ```
 
-You can also use it as a library in your own Python code:
+Low memory mode:
+
+```bash
+python -m csmooth.fmriprep /path/to/fmriprep /path/to/output --fwhm 6.0 --low_mem
+```
+
+### Programmatic Use
 
 ```python
 from csmooth.fmriprep import process_fmriprep_subject
 
-# Define smoothing parameters
-parameters = {
+params = {
     'fwhm': 6.0,
     'mask_dilation': 3,
     'voxel_size': 1.0,
@@ -99,71 +168,33 @@ parameters = {
     'low_memory': False
 }
 
-# Process a single subject
 process_fmriprep_subject(
     fmriprep_subject_dir='/path/to/fmriprep/sub-01',
     output_subject_dir='/path/to/output/sub-01',
-    parameters=parameters
+    parameters=params
 )
 ```
 
-## Examples
+---
+## Building the Image (Optional)
 
-### Process all subjects with 6mm FWHM smoothing (Docker):
-
-```bash
-docker run -v /data/fmriprep:/data/fmriprep \
-           -v /data/output:/data/output \
-           ellisdg/csmooth \
-           /data/fmriprep \
-           /data/output \
-           --fwhm 6.0
-```
-
-### Process single subject with custom parameters (Docker):
+Only needed if you are modifying the source:
 
 ```bash
-docker run -v /data:/data \
-           ellisdg/csmooth \
-           /data/fmriprep \
-           /data/output \
-           --subject 01 \
-           --fwhm 6.0 \
-           --voxel_size 2.0 \
-           --mask_dilation 5 \
-           --multiproc 8
+docker build -t ellisdg/csmooth .
 ```
 
-### Process with tau parameter and output to MNI space (Local):
+---
+## Tips & Troubleshooting
 
-```bash
-python -m csmooth.fmriprep \
-    /path/to/fmriprep \
-    /path/to/output \
-    --subject 01 \
-    --tau 100 \
-    --output_to_mni
-```
+- Ensure fMRIPrep directory contains expected `sub-*` folders and anatomical + functional outputs.
+- If you see missing file errors, verify you ran fMRIPrep with surface reconstruction (`--fs-license-file`).
+- Reduce memory: use `--low_mem`, increase parallelism carefully (`--multiproc`) depending on CPU cores.
+- For higher spatial fidelity, keep `--voxel_size 1.0`; larger values speed up processing but reduce graph detail.
+- MNI output omits T1w-space images (only MNI saved).
 
-### Process custom BOLD files (Docker):
+---
+## Citation
 
-```bash
-docker run -v /data:/data \
-           ellisdg/csmooth \
-           /data/fmriprep \
-           /data/output \
-           --subject 01 \
-           --bold_files /data/custom/sub-01_task-rest_space-T1w_bold.nii.gz \
-           --fwhm 6.0
-```
-
-### Low memory mode for large datasets (Local):
-
-```bash
-python -m csmooth.fmriprep \
-    /path/to/fmriprep \
-    /path/to/output \
-    --fwhm 6.0 \
-    --low_mem \
-    --overwrite
-```
+---
+## License
