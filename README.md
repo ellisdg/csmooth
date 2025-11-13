@@ -2,16 +2,15 @@
 
 ConstrainedSmoothing (csmooth) performs anatomically informed smoothing of fMRIPrep preprocessed BOLD images using cortical surface + volume constraints.
 
-## Quickstart (Docker in 3 commands)
+## Quickstart
 
 You only need Docker installed. The image `ellisdg/csmooth` will be pulled automatically if not present.
 
 1. Create (or identify) two directories:
    - `/path/to/fmriprep` (fMRIPrep derivatives containing sub-*/ folders)
    - `/path/to/output` (will be created if it doesn't exist)
-2. Pick a smoothing parameter (choose one):
+2. Specify a level of smoothing:
    - FWHM in mm: `--fwhm 6.0`
-   - OR heat kernel tau in seconds: `--tau 100`
 3. Run (all subjects):
 
 ```bash
@@ -97,9 +96,8 @@ Required positional:
 - fMRIPrep derivatives directory
 - Output directory
 
-Exactly one of:
+Required smoothing parameter:
 - `--fwhm <float>`  Gaussian target FWHM in mm
-- `--tau <float>`   Heat kernel tau in seconds
 
 Optional modifiers:
 - `--subject <ID>` Only that subject (e.g. 01 for sub-01). If omitted, all `sub-*` directories processed
