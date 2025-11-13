@@ -73,11 +73,12 @@ ttest_results <- tibble(
 
 for (metric in metrics) {
   for (fwhm in metrics_levels) {
-    # Compare methods at each FWHM
-    vals_gaussian <- metrics_data %>% filter(FWHM == fwhm, Method == "gaussian") %>% pull(metric)
-    vals_constrained <- metrics_data %>% filter(FWHM == fwhm, Method == "constrained") %>% pull(metric)
-    if (length(vals_gaussian) > 1 && length(vals_constrained) > 1) {
-      ttest <- t.test(vals_gaussian, vals_constrained)
+    # Compare methods at each FWHM (paired by Subject)
+    vals_gaussian <- metrics_data %>% filter(FWHM == fwhm, Method == "gaussian") %>% select(Subject, !!metric)
+    vals_constrained <- metrics_data %>% filter(FWHM == fwhm, Method == "constrained") %>% select(Subject, !!metric)
+    paired_data <- inner_join(vals_gaussian, vals_constrained, by = "Subject", suffix = c("_gaussian", "_constrained"))
+    if (nrow(paired_data) > 1) {
+      ttest <- t.test(paired_data[[paste0(metric, "_gaussian")]], paired_data[[paste0(metric, "_constrained")]], paired = TRUE)
       ttest_results <- add_row(ttest_results,
         Metric = metric,
         FWHM = fwhm,
@@ -86,13 +87,14 @@ for (metric in metrics) {
         p_value = ttest$p.value
       )
     }
-    # Compare each method at FWHM vs no smoothing (FWHM=0)
+    # Compare each method at FWHM vs no smoothing (FWHM=0), paired by Subject
     if (fwhm != "0") {
       for (method in c("gaussian", "constrained")) {
-        vals_fwhm <- metrics_data %>% filter(FWHM == fwhm, Method == method) %>% pull(metric)
-        vals_nosmooth <- metrics_data %>% filter(FWHM == "0", Method == method) %>% pull(metric)
-        if (length(vals_fwhm) > 1 && length(vals_nosmooth) > 1) {
-          ttest <- t.test(vals_fwhm, vals_nosmooth)
+        vals_fwhm <- metrics_data %>% filter(FWHM == fwhm, Method == method) %>% select(Subject, !!metric)
+        vals_nosmooth <- metrics_data %>% filter(FWHM == "0", Method == method) %>% select(Subject, !!metric)
+        paired_data <- inner_join(vals_fwhm, vals_nosmooth, by = "Subject", suffix = c("_fwhm", "_nosmooth"))
+        if (nrow(paired_data) > 1) {
+          ttest <- t.test(paired_data[[paste0(metric, "_fwhm")]], paired_data[[paste0(metric, "_nosmooth")]], paired = TRUE)
           ttest_results <- add_row(ttest_results,
             Metric = metric,
             FWHM = fwhm,
