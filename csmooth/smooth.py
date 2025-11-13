@@ -494,34 +494,6 @@ def add_file_args(parser):
     return parser
 
 
-def add_parameter_args(parser):
-    parser.add_argument("--tau", type=float,
-                        help="Tau value for heat kernel smoothing. Either --tau or --fwhm must be provided.")
-    parser.add_argument("--fwhm", type=float,
-                        help="FWHM value for Gaussian smoothing. Either --tau or --fwhm must be provided.")
-    parser.add_argument("--mask_dilation", type=int, default=3,
-                        help="Number of voxels to dilate the mask by. "
-                             "This can help make sure no parts of the brain are being erroneously excluded due to any "
-                             "masking errors. "
-                             "If None, no dilation is done. Default is 3.")
-    parser.add_argument("--multiproc", type=int, default=4,
-                        help="Number of parallel processes to use for smoothing.")
-    parser.add_argument("--overwrite", action='store_true',
-                        help="If set, overwrite existing output files. Default is to not overwrite.")
-    parser.add_argument("--voxel_size", type=float, default=1.0,
-                        help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
-                             "Smaller voxel sizes allow for a more continuous graph but increase computational "
-                             "requirements and runtime. Default is 1.0 mm.")
-    parser.add_argument("--low_mem", action='store_true',
-                        help="If set, use low memory mode. This will reduce memory usage but may increase runtime. "
-                             "Memory usage is reduced by smoothing each timepoint separately instead of all at once. "
-                             "This is useful for very large images or when running on machines with limited memory. "
-                             "Default is to smooth all timepoints at once.")
-    parser.add_argument("--debug", action='store_true',
-                        help="If set, enable debug logging. Default is to use info level logging.")
-    return parser
-
-
 def check_parameters(args, parser):
     # Validation to ensure either tau or fwhm is provided
     if args.tau is None and args.fwhm is None:

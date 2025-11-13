@@ -1,10 +1,9 @@
 import glob
 import os
 
-
 import networkx as nx
 
-from csmooth.smooth import add_parameter_args, check_parameters, smooth_images
+from csmooth.smooth import check_parameters, smooth_images
 from csmooth.utils import logger
 
 
@@ -184,14 +183,14 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                                                tau=parameters.get("tau", None),
                                                fwhm=parameters.get("fwhm", None),
                                                output_to_mni=output_to_mni)
-    print("Overwriting output filenames:", parameters["overwrite"])
+    logger.info(f"Overwriting output filenames: {parameters['overwrite']}")
     for input_filename, output_filename in zip(list(files["bold_files"]), list(output_filenames)):
         if not parameters["overwrite"] and os.path.exists(output_filename):
             logger.warning(f"Output file already exists, skipping: {output_filename}")
             files["bold_files"].remove(input_filename)
             output_filenames.remove(output_filename)
         else:
-            print(f"Processing {input_filename} to {output_filename}")
+            logger.info(f"Processing {input_filename} to {output_filename}")
     if not files["bold_files"]:
         logger.info(f"All output files already exist in {output_subject_dir}; skipping processing.")
         return
@@ -199,7 +198,11 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
                                    "cache",
                                    "csmooth_kernel_fwhm-{}mm_voxel-{}mm".format(
         parameters.get("fwhm", None), parameters.get("voxel_size", None)))
-    resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
+    if parameters.get("no_resample", False):
+        logger.warning("Ignoring --voxel_size parameter and not resampling the image prior to smoothing.")
+        resample_resolution = None
+    else:
+        resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
 
     smooth_images(in_files=files["bold_files"],
                   surface_files=files["surface_files"],
@@ -245,8 +248,7 @@ def parse_args():
 
 
 def main():
-    args = parse_args()
-    kwargs = vars(args)
+    kwargs = vars(parse_args())
     fmriprep_dir = kwargs.pop("fmriprep_dir")
     output_dir = kwargs.pop("output_dir")
     subject_id = kwargs.pop("subject")
@@ -283,3 +285,36 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def add_parameter_args(parser):
+    parser.add_argument("--tau", type=float,
+                        help="Tau value for heat kernel smoothing. Either --tau or --fwhm must be provided.")
+    parser.add_argument("--fwhm", type=float,
+                        help="FWHM value for Gaussian smoothing. Either --tau or --fwhm must be provided.")
+    parser.add_argument("--mask_dilation", type=int, default=3,
+                        help="Number of voxels to dilate the mask by. "
+                             "This can help make sure no parts of the brain are being erroneously excluded due to any "
+                             "masking errors. "
+                             "If None, no dilation is done. Default is 3.")
+    parser.add_argument("--multiproc", type=int, default=4,
+                        help="Number of parallel processes to use for smoothing.")
+    parser.add_argument("--overwrite", action='store_true',
+                        help="If set, overwrite existing output files. Default is to not overwrite.")
+    parser.add_argument("--voxel_size", type=float, default=1.0,
+                        help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
+                             "Smaller voxel sizes allow for a more continuous graph but increase computational "
+                             "requirements and runtime. Default is 1.0 mm.")
+    parser.add_argument("--no_resample", action='store_true',
+                        help="If set, do not resample the image prior to smoothing. "
+                             "The graph will be formed using the resolution of the BOLD images. "
+                             "This overrides the --voxel_size parameter. "
+                             "Default is to resample the image to the specified voxel size.")
+    parser.add_argument("--low_mem", action='store_true',
+                        help="If set, use low memory mode. This will reduce memory usage but may increase runtime. "
+                             "Memory usage is reduced by smoothing each timepoint separately instead of all at once. "
+                             "This is useful for very large images or when running on machines with limited memory. "
+                             "Default is to smooth all timepoints at once.")
+    parser.add_argument("--debug", action='store_true',
+                        help="If set, enable debug logging. Default is to use info level logging.")
+    return parser
