@@ -94,7 +94,6 @@ def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_ta
                 break
             else:
                 logger.warning(f"Continuing gradient descent with reduced learning rate.")
-            tau = previous_tau
             learning_rate /= 2
         else:
             gradient = current_fwhm - fwhm
