@@ -22,6 +22,7 @@ suppressPackageStartupMessages({
   library(purrr)
   library(tibble)
   library(RColorBrewer)  # added for brewer.pal used in forest plots
+  library(patchwork)
 })
 
 #---------------------------------------------------------------------
@@ -460,6 +461,10 @@ ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot.pdf"),
 
 ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_forest_plot.pdf"),
        plot = p_forest_intercept, width = 6, height = 4)
+
+ggsave(filename = file.path(out_dir, "sensory_combined_forest_plots.pdf"),
+       plot = p_forest / p_forest_intercept + plot_layout(ncol = 2, guides = "collect"),
+       width = 12, height = 4)
 
 ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_slope_diff_forest_plot.pdf"),
        plot = p_forest_slope_diff, width = 6, height = 4)
