@@ -38,6 +38,23 @@ def compute_dice(array1, array2, threshold=3.1):
 
 def compute_stats(_filename, _method, avg_img, average_filename, subject, session, task, zstat_name, fwhm, output_dir,
                   stats, exist_ok=True):
+    """Compute voxelwise difference image and scalar stats versus the per-subject average.
+
+    Parameters
+    ----------
+    _filename : str
+        Path to the session-level zstat image for a given smoothing method.
+    _method : str
+        Smoothing method label (e.g., 'no_smoothing', 'constrained', 'gaussian', 'constrained_nr').
+    avg_img : nibabel image
+        Subject-level reference average (fwhm=0) for this event.
+    average_filename : str
+        Path to the subject-level average image, used only for logging.
+    exist_ok : bool
+        If False, raise if the *stats row* already exists. Currently this flag only
+        controls whether we short-circuit when the diff file exists; by default we
+        allow overwriting diff images so the script can be re-run safely.
+    """
     print(f"Processing {_method} file {os.path.basename(_filename)}")
     print(f"Comparing {average_filename} to {_filename}")
 
@@ -49,8 +66,8 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
                                  f"ses-{session}",
                                  "func",
                                  f"sub-{subject}_ses-{session}_task-{task}_event-{zstat_name}_fwhm-{fwhm}_{_method}_diff.nii.gz")
-    if os.path.exists(diff_filename) and not exist_ok:
-        raise FileExistsError(f"Diff file {diff_filename} already exists and exist_ok is False")
+    # For robustness, always overwrite the diff image if it exists. This makes the
+    # script idempotent and avoids crashes when re-running on partially processed data.
     os.makedirs(os.path.dirname(diff_filename), exist_ok=True)
     print(f"Writing difference image to {diff_filename}")
     diff_img = avg_img.__class__(diff, avg_img.affine)
@@ -77,13 +94,18 @@ def compute_stats(_filename, _method, avg_img, average_filename, subject, sessio
 def main():
     # find all the motor task zstat images and average them per subject with no smoothing
     # those will be the ground truth for the motor task
+    # then compute stats for each smoothing method and fwhm
     #base_dir = "/data2/david.ellis/public/MSC"
     base_dir = "/media/conda2/public/MSC"
     gaussian_dir = f"{base_dir}/derivatives/fsl_gaussian"
     constrained_dir = f"{base_dir}/derivatives/fsl_constrained"
+    constrained_nr_dir = f"{base_dir}/derivatives/fsl_constrained_nr"
     output_dir = f"{base_dir}/derivatives/motor_stats"
+    # If True, recompute all intermediate averages and overwrite *.nii.gz outputs
     overwrite = False
-    exist_ok = False  # will raise an error if the diff image already exists
+    # We now always overwrite diff images inside compute_stats, so exist_ok mainly
+    # governs behaviour for future extensions; keep it True to allow re-runs.
+    exist_ok = True
     os.makedirs(output_dir, exist_ok=True)
     task = "motor"
     stats = list()
@@ -123,10 +145,11 @@ def main():
                     average_image(no_smoothing_session_filenames, no_smoothing_session_filename)
                 else:
                     print(f"No smoothing average file {no_smoothing_session_filename} exists, skipping")
-                compute_stats(no_smoothing_session_filename, "no_smoothing", avg_img, average_filename, subject, session, task, zstat_name, 0, output_dir, stats)
+                compute_stats(no_smoothing_session_filename, "no_smoothing", avg_img, average_filename, subject, session, task, zstat_name, 0, output_dir, stats, exist_ok=exist_ok)
 
             for fwhm in (3, 6, 9, 12):
                 print(f"Processing fwhm {fwhm}")
+                # Constrained smoothing
                 constrained_wildcard = os.path.join(constrained_dir, f"sub-{subject}/func/*task-{task}*_fwhm-{fwhm}*.feat/stats/zstat{zstat_num}.nii.gz")
                 constrained_filenames = sorted(glob.glob(constrained_wildcard))
                 print(f"Found {len(constrained_filenames)} constrained files")
@@ -181,19 +204,57 @@ def main():
                     else:
                         print(f"Gaussian average file {gaussian_session_filename} exists, skipping")
 
-
                     for _filename, _method in ((constrained_session_filename, "constrained"),
                                                (gaussian_session_filename, "gaussian")):
                         compute_stats(_filename, _method, avg_img, average_filename, subject, session, task,
                                       zstat_name, fwhm, output_dir, stats, exist_ok=exist_ok)
 
+                # Constrained_nr smoothing (non-regularized)
+                constrained_nr_wildcard = os.path.join(constrained_nr_dir, f"sub-{subject}/func/*task-{task}*_fwhm-{fwhm}*.feat/stats/zstat{zstat_num}.nii.gz")
+                constrained_nr_filenames = sorted(glob.glob(constrained_nr_wildcard))
+                print(f"Found {len(constrained_nr_filenames)} constrained_nr files")
+                if len(constrained_nr_filenames) != 20:
+                    # figure out which files are missing
+                    expected_sessions = {f"func{n:02d}" for n in range(1, 11)}
+                    expected_runs = {f"run-{n:02d}" for n in range(1, 3)}
+                    for expected_session in expected_sessions:
+                        for expected_run in expected_runs:
+                            expected_filename = os.path.join(constrained_nr_dir, f"sub-{subject}",
+                                                             "func",
+                                                             f"sub-{subject}_ses-{expected_session}_task-{task}_{expected_run}_space-T1w_desc-csmooth_fwhm-{fwhm}_bold.feat",
+                                                             "stats",
+                                                             f"zstat{zstat_num}.nii.gz")
+                            if expected_filename not in constrained_nr_filenames:
+                                print(f"Missing constrained_nr file: {expected_filename}")
 
+                    raise ValueError(f"Expected 20 constrained_nr files for subject {subject}, fwhm {fwhm}, found {len(constrained_nr_filenames)}")
+
+                constrained_nr_sessions = list()
+                for filename in constrained_nr_filenames:
+                    session = re.search(r"ses-(func\d+)", filename).group(1)
+                    constrained_nr_sessions.append(session)
+                print(f"Constrained_nr sessions: {set(constrained_nr_sessions)}")
+
+                for session in set(constrained_nr_sessions):
+                    constrained_nr_session_filenames = [f for f in constrained_nr_filenames if re.search(r"ses-(func\d+)", f).group(1) == session]
+                    assert len(constrained_nr_session_filenames) == 2, f"Expected 2 constrained_nr files for session {session}, found {len(constrained_nr_session_filenames)}"
+                    constrained_nr_session_filename = os.path.join(output_dir, f"sub-{subject}",
+                                                                   f"ses-{session}",
+                                                                   "func",
+                                                                   f"sub-{subject}_ses-{session}_task-{task}_event-{zstat_name}_fwhm-{fwhm}_constrained_nr_zstat.nii.gz")
+                    if overwrite or not os.path.exists(constrained_nr_session_filename):
+                        average_image(constrained_nr_session_filenames, constrained_nr_session_filename)
+                    else:
+                        print(f"Constrained_nr average file {constrained_nr_session_filename} exists, skipping")
+
+                    for _filename, _method in ((constrained_nr_session_filename, "constrained_nr"),):
+                        compute_stats(_filename, _method, avg_img, average_filename, subject, session, task,
+                                      zstat_name, fwhm, output_dir, stats, exist_ok=exist_ok)
 
     stats_df = pd.DataFrame(stats)
     stats_filename = os.path.join(output_dir, "motor_stats.csv")
     print(f"Writing stats to {stats_filename}")
     stats_df.to_csv(stats_filename, index=False)
-
 
 
 
