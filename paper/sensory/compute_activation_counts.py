@@ -76,7 +76,7 @@ def main():
                                      "mean_zstat", "std_zstat", "n_active",
                                      "mean_func", "std_func", "tSNR",
                                      "fwhm", "smoothing_method"])
-    df.to_csv(f"{base_dir}/derivatives/fsl_stats_task-{task}.csv")
+    df.to_csv(f"{base_dir}/derivatives/stats/fsl_stats_task-{task}.csv")
 
 
 
