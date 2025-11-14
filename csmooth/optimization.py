@@ -42,8 +42,8 @@ def graph_smoothing_with_gradient_descent(data, edge_src, edge_dst, edge_distanc
     return smoothed_signal, tua
 
 def find_optimal_tau(fwhm, edge_src, edge_dst, edge_distances, shape, initial_tau=None,
-                     max_iterations=50, stop_threshold=0.005, learning_rate=3.0, decay_rate=0.99,
-                     random_seed=42, error_threshold=0.5, patience=5):
+                     max_iterations=100, stop_threshold=0.005, learning_rate=3.0, decay_rate=0.99,
+                     random_seed=42, error_threshold=0.5, patience=20):
 
     # TODO: add momentum to the gradient descent
 
