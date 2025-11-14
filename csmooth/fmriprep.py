@@ -194,10 +194,6 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     if not files["bold_files"]:
         logger.info(f"All output files already exist in {output_subject_dir}; skipping processing.")
         return
-    kernel_basename = os.path.join(output_subject_dir,
-                                   "cache",
-                                   "csmooth_kernel_fwhm-{}mm_voxel-{}mm".format(
-        parameters.get("fwhm", None), parameters.get("voxel_size", None)))
     if parameters.get("no_resample", False):
         logger.warning("Ignoring --voxel_size parameter and not resampling the image prior to smoothing.")
         resample_resolution = None
@@ -207,7 +203,6 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     smooth_images(in_files=files["bold_files"],
                   surface_files=files["surface_files"],
                   mask_file=files["mask_file"],
-                  out_kernel_basename=kernel_basename,
                   out_files=output_filenames,
                   output_labelmap=output_labelmap_file,
                   tau=parameters.get("tau", None),
