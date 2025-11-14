@@ -1,4 +1,4 @@
-from compute_averages import transform_image
+from paper.sensory.archive.compute_averages import transform_image
 import glob
 import re
 import os
