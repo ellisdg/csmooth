@@ -11,7 +11,6 @@ from tqdm import tqdm
 
 from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 from csmooth.components import identify_connected_components
-from csmooth.gaussian import gaussian_smoothing, compute_gaussian_kernels, apply_gaussian_smoothing
 from csmooth.graph import create_graph, select_nodes
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.optimization import find_optimal_tau
@@ -37,11 +36,7 @@ def _smooth_component(edge_src, edge_dst, edge_distances, signal_data, tau=None,
     if tau is not None and fwhm is not None:
         raise ValueError("Must provide either tau or fwhm, not both")
     if fwhm is not None:
-        smoothed_data = gaussian_smoothing(data=signal_data,
-                                           edge_src=edge_src,
-                                           edge_dst=edge_dst,
-                                           edge_distances=edge_distances,
-                                           fwhm=fwhm)
+        raise NotImplementedError("Smoothing with Gaussian kernels is no longer supported.")
     elif tau is not None:
         smoothed_data = heat_kernel_smoothing(edge_src=edge_src,
                                               edge_dst=edge_dst,
@@ -125,43 +120,6 @@ def smooth_image(in_file, out_file, surface_files, **kwargs):
     smooth_images([in_file], [out_file], surface_files, **kwargs)
 
 
-def precompute_guassian_kernels(edge_src, edge_dst, edge_distances, labels, sorted_labels, unique_nodes,
-                                out_kernel_basename, fwhm):
-    """
-    Precompute Gaussian kernels for each component and save to file.
-    :param edge_src:
-    :param edge_dst:
-    :param edge_distances:
-    :param labels:
-    :param sorted_labels:
-    :param unique_nodes:
-    :param out_kernel_basename:
-    :param fwhm:
-    :return:
-    """
-    # for each component, compute the gaussian kernels and save to file
-    kernel_filenames = []
-    os.makedirs(os.path.dirname(out_kernel_basename), exist_ok=True)
-    for label in tqdm(sorted_labels, desc="Computing smoothing kernels", unit="component"):
-        out_kernel_filename = out_kernel_basename + f"_{label}.npz"
-        if not os.path.exists(out_kernel_filename):
-            _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(edge_src=edge_src,
-                                                                         edge_dst=edge_dst,
-                                                                         edge_distances=edge_distances,
-                                                                         labels=labels,
-                                                                         label=label,
-                                                                         unique_nodes=unique_nodes)
-            _edge_src, _edge_dst, _edge_weights = compute_gaussian_kernels(edge_src=_edge_src,
-                                                                           edge_dst=_edge_dst,
-                                                                           edge_distances=_edge_distances,
-                                                                           fwhm=fwhm)
-            np.savez_compressed(out_kernel_filename,
-                                src=_edge_src,
-                                dst=_edge_dst,
-                                weights=_edge_weights,
-                                nodes=_nodes)
-        kernel_filenames.append(out_kernel_filename)
-    return kernel_filenames
 
 
 def load_image(in_file, reference_image=None):
@@ -331,48 +289,7 @@ def apply_estimated_gaussian_smoothing(in_files, out_files, edge_src, edge_dst, 
                     output_transform=output_transform)
 
 
-def apply_precomputed_kernels(in_files, out_files, kernel_filenames, resampled_reference=None):
-    """
-    Apply precomputed Gaussian kernels to smooth images.
-    :param in_files:
-    :param out_files:
-    :param kernel_filenames:
-    :param resampled_reference:
-    :return:
-    """
-    for in_file, out_file in zip(in_files, out_files):
-
-        signal_image, orig_image = load_image(in_file, reference_image=resampled_reference)
-        signal_data = signal_image.get_fdata()
-
-        if signal_data.ndim == 3:
-            signal_data = signal_data[..., None]
-
-        _shape = signal_data.shape
-
-        signal_data = signal_data.reshape(-1, signal_data.shape[-1])
-        smoothed_signal_data = signal_data.copy()
-
-        for kernel_filename in kernel_filenames:
-            kernel_data = np.load(kernel_filename)
-            _edge_src = kernel_data['src']
-            _edge_dst = kernel_data['dst']
-            _edge_weights = kernel_data['weights']
-            nodes = kernel_data['nodes']
-
-            smoothed_signal_data[nodes, :] = apply_gaussian_smoothing(signal_data[nodes, :],
-                                                                      _edge_src,
-                                                                      _edge_dst,
-                                                                      _edge_weights)
-
-        smoothed_image = nib.Nifti1Image(smoothed_signal_data.reshape(_shape),
-                                         affine=signal_image.affine)
-        write_image(image=smoothed_image,
-                    out_file=out_file,
-                    target_image=orig_image)
-
-
-def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, tau=None, fwhm=None,
+def smooth_images(in_files, out_files, surface_files, tau=None, fwhm=None,
                   output_labelmap=None,
                   resample_resolution=None, mask_file=None, mask_dilation=3,
                   estimate=True, low_memory=False,
@@ -439,27 +356,8 @@ def smooth_images(in_files, out_files, surface_files, out_kernel_basename=None, 
                 low_memory=low_memory,
                 output_transform=t1w_to_mni_transform)
         else:
-            warnings.warn("Computing Gaussian kernels for each component. This may take a very long time for "
-                          "large Guassian FWHM values and/or high resolution images.")
-            if out_kernel_basename is None:
-                raise ValueError("out_kernel_basename must be provided if fwhm is provided and estimate is False.")
-
-            kernel_filenames = precompute_guassian_kernels(
-                edge_src=edge_src,
-                edge_dst=edge_dst,
-                edge_distances=edge_distances,
-                labels=labels,
-                sorted_labels=sorted_labels,
-                unique_nodes=unique_nodes,
-                out_kernel_basename=out_kernel_basename,
-                fwhm=fwhm)
-
-            apply_precomputed_kernels(
-                in_files=in_files,
-                out_files=out_files,
-                kernel_filenames=kernel_filenames,
-                resampled_reference=resampled_reference)
-
+            # Deprecated. No longer supported. Raise error.
+            raise NotImplementedError("Precomputing Gaussian kernels is no longer supported.")
 
 def parse_args():
     import argparse
