@@ -161,7 +161,7 @@ def load_reference_image(reference_file, resample_resolution=None):
         reference_image = nib.Nifti1Image(reference_data, _affine)
         resampled_reference = reference_image
     else:
-        reference_image = first_image
+        reference_image = nib.Nifti1Image(np.asarray(first_image.dataobj)[..., 0], first_image.affine)
         resampled_reference = None
 
     return reference_image, resampled_reference
