@@ -240,11 +240,30 @@ def plot_mri_with_contours(
             )
             if not np.any(mask_surf):
                 continue
+
+            # Mask vertices and reindex triangles so all triangle indices
+            # refer to the cropped vertex array. This avoids situations
+            # where triangles reference vertices that were masked out.
+            verts = np.column_stack((surf_x, surf_y, surf_axis))
+            verts_in = verts[mask_surf]
+            axis_in = surf_axis[mask_surf]
+
+            # Map old vertex indices -> new indices in verts_in
+            old_to_new = -np.ones(len(surf_x), dtype=int)
+            old_to_new[mask_surf] = np.arange(np.count_nonzero(mask_surf))
+            tris = surf["tris"]
+            # Keep triangles whose all vertices are inside the mask
+            tri_new = old_to_new[tris]
+            valid = np.all(tri_new >= 0, axis=1)
+            tri_new = tri_new[valid]
+            if tri_new.size == 0:
+                continue
+
             ax.tricontour(
-                surf_x[mask_surf] - min_x,
-                surf_y[mask_surf] - min_y,
-                surf["tris"],
-                surf_axis[mask_surf],
+                verts_in[:, 0] - min_x,
+                verts_in[:, 1] - min_y,
+                tri_new,
+                axis_in,
                 levels=[sl],
                 colors=color,
                 linewidths=surface_thickness,
@@ -393,11 +412,30 @@ def plot_mri_with_contours(
             )
             if not np.any(mask_surf):
                 continue
+
+            # Mask vertices and reindex triangles so all triangle indices
+            # refer to the cropped vertex array. This avoids situations
+            # where triangles reference vertices that were masked out.
+            verts = np.column_stack((surf_x, surf_y, surf_axis))
+            verts_in = verts[mask_surf]
+            axis_in = surf_axis[mask_surf]
+
+            # Map old vertex indices -> new indices in verts_in
+            old_to_new = -np.ones(len(surf_x), dtype=int)
+            old_to_new[mask_surf] = np.arange(np.count_nonzero(mask_surf))
+            tris = surf["tris"]
+            # Keep triangles whose all vertices are inside the mask
+            tri_new = old_to_new[tris]
+            valid = np.all(tri_new >= 0, axis=1)
+            tri_new = tri_new[valid]
+            if tri_new.size == 0:
+                continue
+
             plot_ax.tricontour(
-                surf_x[mask_surf] - min_x,
-                surf_y[mask_surf] - min_y,
-                surf["tris"],
-                surf_axis[mask_surf],
+                verts_in[:, 0] - min_x,
+                verts_in[:, 1] - min_y,
+                tri_new,
+                axis_in,
                 levels=[sl],
                 colors=color,
                 linewidths=surface_thickness,
