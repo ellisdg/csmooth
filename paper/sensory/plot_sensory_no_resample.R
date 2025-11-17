@@ -290,7 +290,7 @@ write.csv(glmm_results %>% select(region,
 
 print(glmm_results)
 
-# NEW: Tidy differences dataset with exponentiated ratios (response scale)
+# Tidy differences dataset with exponentiated ratios (response scale)
 diffs_tidy <- bind_rows(
   glmm_results %>%
     transmute(region,
@@ -393,7 +393,7 @@ p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, c
 
 
 #---------------------------------------------------------------------
-# NEW: Forest plots for differences vs Gaussian (ratio-of-rate-ratios)
+# Forest plots for differences vs Gaussian (ratio-of-rate-ratios)
 #---------------------------------------------------------------------
 # Slope differences (interaction terms) on response scale
 slope_diff_df <- glmm_results %>%
