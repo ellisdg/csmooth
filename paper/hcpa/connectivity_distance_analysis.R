@@ -27,20 +27,20 @@ cat("Output Directory:", output_dir, "\n")
 data = read_parquet(data_file)
 
 # Diagnostic checks
-print("Data dimensions:")
-print(dim(data))
-print("Column names:")
-print(names(data))
-print("Data structure:")
-print(str(data))
+# print("Data dimensions:")
+# print(dim(data))
+# print("Column names:")
+# print(names(data))
+# print("Data structure:")
+# print(str(data))
 
 # Check the range and distribution of key variables
-print("Distance_mm summary:")
-print(summary(data$Distance_mm))
-print("FWHM summary:")
-print(summary(data$FWHM))
-print("FisherZ_Connectivity summary:")
-print(summary(data$FisherZ_Connectivity))
+# print("Distance_mm summary:")
+# print(summary(data$Distance_mm))
+# print("FWHM summary:")
+# print(summary(data$FWHM))
+# print("FisherZ_Connectivity summary:")
+# print(summary(data$FisherZ_Connectivity))
 
 # Define Method based on FWHM: when FWHM == 0 call it "no_smoothing".
 # Remove any duplicate rows so there are no repeated rows in the dataset.
@@ -85,7 +85,7 @@ print("Creating prediction grid...")
 # compute the 99 percentile range of Distance_mm
 # (use the same bounds as before)
 dist_range <- quantile(data$Distance_mm, probs = c(0.005, 0.995))
-print(paste("Distance_mm 2.5%:", dist_range[1], "97.5%:", dist_range[2]))
+print(paste("Distance_mm 0.5%:", dist_range[1], "99.5%:", dist_range[2]))
 # sequence of distances to predict over
 dist_seq <- seq(dist_range[1], dist_range[2], length.out = 50)
 
@@ -110,6 +110,10 @@ print("Predictions complete.")
 
 # Make FWHM a factor for plotting
 newdat$FWHM <- factor(newdat$FWHM, levels = sort(unique(data$FWHM)))
+
+# save the predictions to a parquet file
+predictions_file <- file.path(output_dir, "connectivity_distance_by_method_and_fwhm_predictions.parquet")
+write_parquet(newdat, predictions_file)
 
 # Create the plot with proper grouping
 pred_plot <- ggplot() +
