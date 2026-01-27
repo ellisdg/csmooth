@@ -56,22 +56,6 @@ That's it for most users. See below for advanced options.
 
 You can customize processing with the optional flags below.
 
-Common additions:
-
-```bash
-docker run -v /path/to/fmriprep:/data/fmriprep \
-           -v /path/to/output:/data/output \
-           ellisdg/csmooth \
-           /data/fmriprep \
-           /data/output \
-           --subject 01 \
-           --tau 120 \
-           --voxel_size 1.0 \
-           --mask_dilation 3 \
-           --multiproc 8 \
-           --overwrite
-```
-
 Use custom BOLD files (must be T1w space and include `space-T1w` in name):
 
 ```bash
@@ -87,7 +71,7 @@ docker run -v /path/to/fmriprep:/data/fmriprep \
 ```
 
 Low memory mode (process timepoints individually): add `--low_mem`.
-Disable resampling (use native BOLD voxel grid): add `--no_resample` (then `--voxel_size` is ignored).
+Disable resampling (use native BOLD voxel grid): add `--no_resample` (`--voxel_size` is ignored).
 
 ---
 ## Command Line Arguments (Summary)
