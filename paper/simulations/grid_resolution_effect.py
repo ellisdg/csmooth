@@ -412,6 +412,8 @@ def run_grid_resolution_experiment(
     threshold_quantile_within_gt: float = 0.85,
     reference_voxel_volume_mm3: float = 1.0,
     gt_amplitude: float = 2.0,
+    # Noise scaling control
+    scale_noise_by_voxel_volume: bool = True,
     # Plotting controls
     t1w_file: str | None = None,
     plot_outputs: bool = True,
@@ -429,10 +431,6 @@ def run_grid_resolution_experiment(
     Noise comparability:
       - noise_std is interpreted as the *per-voxel std at reference_voxel_volume_mm3* (default 1mm^3).
       - Per-voxel noise is scaled by sqrt(Vref / V).
-
-    Thresholding:
-      - For evaluation, GT and prediction masks are defined by a quantile threshold within the GT label domain
-        to avoid dependence on absolute amplitude scales.
     """
     os.makedirs(output_dir, exist_ok=True)
     rng = np.random.default_rng(random_seed)
@@ -524,11 +522,14 @@ def run_grid_resolution_experiment(
         # Compute volume-aware noise std for this grid.
         zooms = reference_image.header.get_zooms()[:3]
         voxel_volume = float(np.prod(zooms))
-        noise_std_this = noise_std_for_voxel_volume(
-            noise_std_ref=float(noise_std),
-            voxel_volume_mm3=voxel_volume,
-            ref_volume_mm3=float(reference_voxel_volume_mm3),
-        )
+        if scale_noise_by_voxel_volume:
+            noise_std_this = noise_std_for_voxel_volume(
+                noise_std_ref=float(noise_std),
+                voxel_volume_mm3=voxel_volume,
+                ref_volume_mm3=float(reference_voxel_volume_mm3),
+            )
+        else:
+            noise_std_this = float(noise_std)
 
         # Simulate map: continuous GT + white noise (everywhere in mask), then zero outside mask.
         noise = rng.normal(0.0, noise_std_this, size=gt_field.shape).astype(float)
@@ -731,6 +732,7 @@ def run_grid_resolution_experiment(
             "threshold_quantile_within_gt": float(threshold_quantile_within_gt),
             "noise_std_ref": float(noise_std),
             "reference_voxel_volume_mm3": float(reference_voxel_volume_mm3),
+            "scale_noise_by_voxel_volume": bool(scale_noise_by_voxel_volume),
             "voxel_volume_mm3": float(voxel_volume),
             "noise_std_this": float(noise_std_this),
             "sensitivity": float(sens),
@@ -880,6 +882,11 @@ def main():
         help="Infer aparc label from the GT center voxel index",
     )
     parser.add_argument(
+        "--no-scale-noise-std",
+        action="store_true",
+        help="Disable voxel-volume scaling for noise std",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=os.path.join(file_dir, "./grid_resolution_effect_outputs"),
@@ -910,7 +917,8 @@ def main():
         f"fwhm{_fmt_float(fwhm)}_"
         f"gtfwhm{_fmt_float(args.gt_fwhm)}_"
         f"gt{gt_center_ijk[0]}-{gt_center_ijk[1]}-{gt_center_ijk[2]}_"
-        f"amp{_fmt_float(args.gt_amplitude)}"
+        f"amp{_fmt_float(args.gt_amplitude)}_"
+        f"noise{'Unscaled' if args.no_scale_noise_std else 'Scaled'}"
     )
     output_dir = os.path.join(args.output_dir, run_id)
 
@@ -930,6 +938,7 @@ def main():
         t1w_file=t1w_file,
         gt_center_ijk=gt_center_ijk,
         gt_fwhm_mm=float(args.gt_fwhm),
+        scale_noise_by_voxel_volume=not args.no_scale_noise_std,
     )
 
 
