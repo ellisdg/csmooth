@@ -486,6 +486,7 @@ def run_grid_resolution_experiment(
     scale_noise_by_voxel_volume: bool = True,
     # Plotting controls
     t1w_file: str | None = None,
+    gm_prob_file: str | None = None,
     plot_outputs: bool = True,
     plot_block_len: int = 7,
 ):
@@ -509,6 +510,7 @@ def run_grid_resolution_experiment(
     aparc_img = nib.load(aparc_file)
     brain_mask_image = nib.load(brain_mask_file)
     t1_img = nib.load(t1w_file) if t1w_file else None
+    gm_prob_img = nib.load(gm_prob_file) if gm_prob_file else None
 
     if gt_fwhm_mm is None:
         gt_fwhm_mm = float(fwhm)
@@ -579,6 +581,8 @@ def run_grid_resolution_experiment(
         component_densities = compute_component_graph_densities(edge_src, edge_dst, labels, unique_nodes)
         component_densities_json = json.dumps(component_densities, sort_keys=True)
 
+        gm_component_labels: list[int] = []
+
         output_labelmap = os.path.join(output_dir, f"labelmap_{voxel_size}mm.nii.gz")
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
                       unique_nodes)
@@ -597,6 +601,16 @@ def run_grid_resolution_experiment(
         gt_field_img = nib.Nifti1Image(gt_field, reference_image.affine)
         gt_field_path = os.path.join(output_dir, f"gt_field_{voxel_size}mm.nii.gz")
         nib.save(gt_field_img, gt_field_path)
+
+        if gm_prob_img is not None:
+            gm_prob_res = resample_to_img(gm_prob_img, reference_image, interpolation="continuous", force_resample=True)
+            gm_prob_flat = np.asarray(gm_prob_res.get_fdata(), dtype=float).ravel()
+            for label in np.unique(labels):
+                nodes = unique_nodes[labels == label]
+                if nodes.size == 0:
+                    continue
+                if float(np.sum(gm_prob_flat[nodes])) > 0.5:
+                    gm_component_labels.append(int(label))
 
         # Compute volume-aware noise std for this grid.
         zooms = reference_image.header.get_zooms()[:3]
@@ -809,6 +823,25 @@ def run_grid_resolution_experiment(
 
         sens, spec, dice, tp, fp, tn, fn = compute_binary_metrics(gt_mask, pred_mask)
 
+        gm_component_density_mean = float("nan")
+        gm_raw_mean = float("nan")
+        gm_raw_std = float("nan")
+        gm_smoothed_mean = float("nan")
+        gm_smoothed_std = float("nan")
+        if gm_component_labels:
+            gm_densities = [component_densities[int(lbl)] for lbl in gm_component_labels if int(lbl) in component_densities]
+            if gm_densities:
+                gm_component_density_mean = float(np.mean(gm_densities))
+
+            gm_nodes = unique_nodes[np.isin(labels, gm_component_labels)]
+            if gm_nodes.size > 0:
+                gm_raw_vals = raw_tmap_3d.ravel()[gm_nodes]
+                gm_smoothed_vals = smoothed_3d.ravel()[gm_nodes]
+                gm_raw_mean = float(np.mean(gm_raw_vals))
+                gm_raw_std = float(np.std(gm_raw_vals))
+                gm_smoothed_mean = float(np.mean(gm_smoothed_vals))
+                gm_smoothed_std = float(np.std(gm_smoothed_vals))
+
         row = {
             "voxel_size_mm": float(voxel_size),
             "fwhm_mm": float(fwhm),
@@ -822,6 +855,11 @@ def run_grid_resolution_experiment(
             "voxel_volume_mm3": float(voxel_volume),
             "noise_std_this": float(noise_std_this),
             "component_graph_densities": component_densities_json,
+            "gm_component_density_mean": float(gm_component_density_mean),
+            "gm_raw_mean": float(gm_raw_mean),
+            "gm_raw_std": float(gm_raw_std),
+            "gm_smoothed_mean": float(gm_smoothed_mean),
+            "gm_smoothed_std": float(gm_smoothed_std),
             "sensitivity": float(sens),
             "specificity": float(spec),
             "dice": float(dice),
@@ -960,6 +998,7 @@ def main():
     pial_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_pial.surf.gii")
     white_l_file = os.path.join(file_dir, "./sub-MSC06_hemi-L_white.surf.gii")
     white_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_white.surf.gii")
+    gm_prob_file = os.path.join(file_dir, "./sub-MSC06_label-GM_probseg.nii.gz")
 
     parser = argparse.ArgumentParser(description="Run grid resolution GT simulation")
     parser.add_argument("--gt-amplitude", type=float, default=2.0, help="Amplitude multiplier for GT field")
@@ -1037,6 +1076,7 @@ def main():
         output_dir=output_dir,
         gt_amplitude=args.gt_amplitude,
         t1w_file=t1w_file,
+        gm_prob_file=gm_prob_file,
         gt_center_ijk=gt_center_ijk,
         gt_fwhm_mm=float(args.gt_fwhm),
         scale_noise_by_voxel_volume=not args.no_scale_noise_std,
