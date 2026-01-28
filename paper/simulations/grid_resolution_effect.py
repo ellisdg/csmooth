@@ -352,12 +352,12 @@ def _plot_value_range_multi(arrays: list[np.ndarray], mask: np.ndarray | None = 
 
 
 def _compute_crop_bounds_from_stat_map(
-    stat_map_img: nib.Nifti1Image,
-    t1_img: nib.Nifti1Image,
-    slice_index: int,
-    threshold: float,
-    padding: int = 0,
-) -> tuple[int, int, int, int]:
+     stat_map_img: nib.Nifti1Image,
+     t1_img: nib.Nifti1Image,
+     slice_index: int,
+     threshold: float,
+     padding: int = 0,
+ ) -> tuple[int, int, int, int]:
     """Compute crop bounds in axial slice space using a stat-map threshold."""
     if not np.allclose(stat_map_img.affine, t1_img.affine):
         stat_map_img = resample_to_img(
@@ -540,7 +540,12 @@ def run_grid_resolution_experiment(
 
     combined_items = []
     combined_arrays = []
-    crop_padding = 5
+    crop_padding_mm = 20.0
+    crop_padding = 0
+    if t1_img is not None:
+        in_plane_zoom = max(float(z) for z in t1_img.header.get_zooms()[:2])
+        if in_plane_zoom > 0:
+            crop_padding = int(np.ceil(crop_padding_mm / in_plane_zoom))
 
     # surfaces list passed to create_graph
     surface_files = [pial_l_file, pial_r_file, white_l_file, white_r_file]
@@ -660,6 +665,7 @@ def run_grid_resolution_experiment(
                 stat_map_vmax=gt_vmax,
                 surface_thickness=0.25,
                 colorbar=True,
+                crop_enabled=False,
             )
             gt_png = os.path.join(plot_dir, f"gt_{voxel_size}mm.png")
             gt_fig.savefig(gt_png, dpi=300)
@@ -680,6 +686,7 @@ def run_grid_resolution_experiment(
                 stat_map_vmax=raw_vmax,
                 surface_thickness=0.25,
                 colorbar=True,
+                crop_enabled=False,
             )
             raw_png = os.path.join(plot_dir, f"raw_{voxel_size}mm.png")
             raw_fig.savefig(raw_png, dpi=300)
@@ -700,6 +707,7 @@ def run_grid_resolution_experiment(
                 stat_map_vmax=sm_vmax,
                 surface_thickness=0.25,
                 colorbar=True,
+                crop_enabled=False,
             )
             sm_png = os.path.join(plot_dir, f"smoothed_{voxel_size}mm.png")
             sm_fig.savefig(sm_png, dpi=300)
@@ -883,7 +891,7 @@ def run_grid_resolution_experiment(
                 ax=axs[0, col],
                 crop_bounds=crop_bounds,
             )
-            axs[0, col].set_title(f"GT {voxel_label}")
+            axs[0, col].set_title(f"GT {voxel_label}", color="white")
             axs[0, col].set_facecolor("black")
 
             plot_mri_with_contours(
@@ -904,7 +912,7 @@ def run_grid_resolution_experiment(
                 ax=axs[1, col],
                 crop_bounds=crop_bounds,
             )
-            axs[1, col].set_title(f"Raw {voxel_label}")
+            axs[1, col].set_title(f"Raw {voxel_label}", color="white")
             axs[1, col].set_facecolor("black")
 
             plot_mri_with_contours(
@@ -925,7 +933,7 @@ def run_grid_resolution_experiment(
                 ax=axs[2, col],
                 crop_bounds=crop_bounds,
             )
-            axs[2, col].set_title(f"Smoothed {voxel_label}")
+            axs[2, col].set_title(f"Smoothed {voxel_label}", color="white")
             axs[2, col].set_facecolor("black")
 
         combined_grid_path = os.path.join(plot_dir, "combined_all_voxels.png")
