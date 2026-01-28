@@ -15,6 +15,7 @@ The smallest voxel size is 1mm isotropic, and the largest is 4mm isotropic, with
 # paper/simulations/grid_resolution_effect.py
 import os
 import csv
+import json
 import numpy as np
 import nibabel as nib
 from tqdm import tqdm
@@ -63,6 +64,42 @@ def compute_binary_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     spec = tn / (tn + fp) if (tn + fp) > 0 else float("nan")
     dice = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else float("nan")
     return sens, spec, dice, tp, fp, tn, fn
+
+
+def compute_component_graph_densities(
+    edge_src: np.ndarray,
+    edge_dst: np.ndarray,
+    labels: np.ndarray,
+    unique_nodes: np.ndarray,
+) -> dict[int, float]:
+    """Compute undirected graph density per connected component label."""
+    densities: dict[int, float] = {}
+    if labels.size == 0:
+        return densities
+
+    max_node_id = int(max(np.max(edge_src), np.max(edge_dst))) if edge_src.size else -1
+    label_lookup = np.full(max_node_id + 1, -1, dtype=int)
+    label_lookup[unique_nodes] = labels
+
+    edge_label_src = label_lookup[edge_src]
+    edge_label_dst = label_lookup[edge_dst]
+
+    label_counts = dict(zip(*np.unique(labels, return_counts=True)))
+    for label, n_nodes in label_counts.items():
+        n_nodes = int(n_nodes)
+        if n_nodes < 2:
+            densities[int(label)] = 0.0
+            continue
+        edge_mask = (edge_label_src == label) & (edge_label_dst == label)
+        if not np.any(edge_mask):
+            densities[int(label)] = 0.0
+            continue
+        edges = np.column_stack((edge_src[edge_mask], edge_dst[edge_mask]))
+        undirected = np.sort(edges, axis=1)
+        unique_pairs = np.unique(undirected, axis=0)
+        n_edges = int(unique_pairs.shape[0])
+        densities[int(label)] = float((2.0 * n_edges) / (n_nodes * (n_nodes - 1)))
+    return densities
 
 
 def _roc_auc_from_scores(y_true: np.ndarray, scores: np.ndarray) -> float:
@@ -288,7 +325,7 @@ def _plot_value_range(data: np.ndarray, mask: np.ndarray | None = None,
 
 
 def _plot_value_range_multi(arrays: list[np.ndarray], mask: np.ndarray | None = None,
-                            lower_q: float = 70.0, upper_q: float = 99.0, thr_q: float = 85.0) -> tuple[float, float, float]:
+                             lower_q: float = 70.0, upper_q: float = 99.0, thr_q: float = 85.0) -> tuple[float, float, float]:
     """Compute shared vmin/vmax/threshold across multiple arrays."""
     if not arrays:
         return 0.0, 1.0, 0.5
@@ -312,6 +349,39 @@ def _plot_value_range_multi(arrays: list[np.ndarray], mask: np.ndarray | None = 
     if not np.isfinite(thr):
         thr = vmin
     return vmin, vmax, thr
+
+
+def _compute_crop_bounds_from_stat_map(
+    stat_map_img: nib.Nifti1Image,
+    t1_img: nib.Nifti1Image,
+    slice_index: int,
+    threshold: float,
+    padding: int = 0,
+) -> tuple[int, int, int, int]:
+    """Compute crop bounds in axial slice space using a stat-map threshold."""
+    if not np.allclose(stat_map_img.affine, t1_img.affine):
+        stat_map_img = resample_to_img(
+            stat_map_img,
+            t1_img,
+            interpolation="continuous",
+            force_resample=True,
+            copy_header=True,
+        )
+    data = np.asarray(stat_map_img.get_fdata(), dtype=float)
+    sl = max(0, min(data.shape[2] - 1, int(slice_index)))
+    stat_slice = data[:, :, sl].T
+    mask = np.isfinite(stat_slice) & (stat_slice >= float(threshold))
+    if not np.any(mask):
+        return 0, 0, stat_slice.shape[0] - 1, stat_slice.shape[1] - 1
+    coords = np.argwhere(mask)
+    min_y, min_x = coords.min(axis=0)
+    max_y, max_x = coords.max(axis=0)
+    if padding:
+        min_y = max(0, int(min_y) - int(padding))
+        min_x = max(0, int(min_x) - int(padding))
+        max_y = min(stat_slice.shape[0] - 1, int(max_y) + int(padding))
+        max_x = min(stat_slice.shape[1] - 1, int(max_x) + int(padding))
+    return int(min_y), int(min_x), int(max_y), int(max_x)
 
 
 def apply_estimated_gaussian_smoothing(signal_data, edge_src, edge_dst, edge_distances, labels, sorted_labels,
@@ -470,6 +540,7 @@ def run_grid_resolution_experiment(
 
     combined_items = []
     combined_arrays = []
+    crop_padding = 5
 
     # surfaces list passed to create_graph
     surface_files = [pial_l_file, pial_r_file, white_l_file, white_r_file]
@@ -499,6 +570,9 @@ def run_grid_resolution_experiment(
         edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files)
 
         labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
+
+        component_densities = compute_component_graph_densities(edge_src, edge_dst, labels, unique_nodes)
+        component_densities_json = json.dumps(component_densities, sort_keys=True)
 
         output_labelmap = os.path.join(output_dir, f"labelmap_{voxel_size}mm.nii.gz")
         save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
@@ -656,6 +730,9 @@ def run_grid_resolution_experiment(
                 stat_map_vmin=combo_vmin,
                 stat_map_vmax=combo_vmax,
                 colorbar=True,
+                crop_map_fname=gt_field_path,
+                crop_stat_map_threshold=gt_thr,
+                crop_padding=crop_padding,
             )
             combo_png = os.path.join(plot_dir, f"combined_single_slice_{voxel_size}mm.png")
             combo_fig.savefig(combo_png, dpi=300)
@@ -667,6 +744,7 @@ def run_grid_resolution_experiment(
                     "gt_path": gt_field_path,
                     "raw_path": original_tmap_path,
                     "sm_path": smoothed_tmap_path,
+                    "gt_thr": float(gt_thr),
                 }
             )
             combined_arrays.append(np.where(domain_mask, gt_field, np.nan))
@@ -735,6 +813,7 @@ def run_grid_resolution_experiment(
             "scale_noise_by_voxel_volume": bool(scale_noise_by_voxel_volume),
             "voxel_volume_mm3": float(voxel_volume),
             "noise_std_this": float(noise_std_this),
+            "component_graph_densities": component_densities_json,
             "sensitivity": float(sens),
             "specificity": float(spec),
             "dice": float(dice),
@@ -768,6 +847,7 @@ def run_grid_resolution_experiment(
         combined_items = sorted(combined_items, key=lambda item: item["voxel_size"])
         n_cols = len(combined_items)
         fig, axs = plt.subplots(3, n_cols, figsize=(3.0 * n_cols, 8.5))
+        fig.patch.set_facecolor("black")
         if n_cols == 1:
             axs = np.array([[axs[0]], [axs[1]], [axs[2]]])
 
@@ -777,6 +857,13 @@ def run_grid_resolution_experiment(
 
         for col, item in enumerate(combined_items):
             voxel_label = f"{item['voxel_size']}mm"
+            crop_bounds = _compute_crop_bounds_from_stat_map(
+                stat_map_img=nib.load(item["gt_path"]),
+                t1_img=t1_img,
+                slice_index=slices[0],
+                threshold=float(item["gt_thr"]),
+                padding=crop_padding,
+            )
 
             plot_mri_with_contours(
                 mri_fname=t1w_file,
@@ -794,8 +881,10 @@ def run_grid_resolution_experiment(
                 surface_thickness=0.25,
                 colorbar=False,
                 ax=axs[0, col],
+                crop_bounds=crop_bounds,
             )
             axs[0, col].set_title(f"GT {voxel_label}")
+            axs[0, col].set_facecolor("black")
 
             plot_mri_with_contours(
                 mri_fname=t1w_file,
@@ -813,8 +902,10 @@ def run_grid_resolution_experiment(
                 surface_thickness=0.25,
                 colorbar=False,
                 ax=axs[1, col],
+                crop_bounds=crop_bounds,
             )
             axs[1, col].set_title(f"Raw {voxel_label}")
+            axs[1, col].set_facecolor("black")
 
             plot_mri_with_contours(
                 mri_fname=t1w_file,
@@ -832,8 +923,10 @@ def run_grid_resolution_experiment(
                 surface_thickness=0.25,
                 colorbar=(col == n_cols - 1),
                 ax=axs[2, col],
+                crop_bounds=crop_bounds,
             )
             axs[2, col].set_title(f"Smoothed {voxel_label}")
+            axs[2, col].set_facecolor("black")
 
         combined_grid_path = os.path.join(plot_dir, "combined_all_voxels.png")
         fig.savefig(combined_grid_path, dpi=300, bbox_inches="tight")
