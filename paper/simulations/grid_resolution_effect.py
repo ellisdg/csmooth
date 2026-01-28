@@ -9,17 +9,23 @@ The accuracy of the smoothing is evaluated based on how well the smoothed data r
 as measured by metrics such as sensitivity, specificity, and Dice coefficient.
 The regression coefficients are estimated using OLS, as the focus is on the effect of grid resolution rather than
 the estimation method, and the only noise present is white noise.
-The smallest voxel size is 0.5mm isotropic, and the largest is 4mm isotropic, with increments of 0.5mm.
+The smallest voxel size is 1mm isotropic, and the largest is 4mm isotropic, with increments of 1mm.
 """
 
 # paper/simulations/grid_resolution_effect.py
 import os
 import csv
 import numpy as np
+import nibabel as nib
+from tqdm import tqdm
 
-from csmooth.smooth import smooth_images, save_labelmap
+from nilearn.image import resample_to_img
+
+from csmooth.smooth import (smooth_images, save_labelmap, load_reference_image, process_mask, select_nodes,
+                            find_optimal_tau, smooth_component)
 from csmooth.graph import create_graph
 from csmooth.components import identify_connected_components
+from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 
 
 def _frange(start: float, stop: float, step: float):
@@ -62,6 +68,82 @@ def simulate_volume(mask: np.ndarray, signal_amplitude: float, noise_std: float,
     return vol
 
 
+def apply_estimated_gaussian_smoothing(signal_data, edge_src, edge_dst, edge_distances, labels, sorted_labels,
+                                       unique_nodes, fwhm, low_memory=False):
+    """
+    Apply estimated Gaussian smoothing to a list of images based on the provided graph structure.
+    Finds the optimal tau for each of the five largest components in the graph (background, wm left/right, gm left/right).
+    The rest of the components are smoothed with the mean tau of the five largest components.
+
+    :param edge_src: Source nodes of the graph edges.
+    :param edge_dst: Destination nodes of the graph edges.
+    :param edge_distances: Distances of the graph edges.
+    :param labels: Labels for each node in the graph.
+    :param sorted_labels: Sorted list of labels by size of components.
+    :param unique_nodes: Unique nodes in the graph.
+    :param fwhm: Target full width at half maximum in mm for smoothing.
+    :param low_memory: If True, use low memory mode. This will reduce memory usage but may increase runtime.
+    :return: None
+    """
+    # Estimate optimal tau for each component to achieve the target fwhm
+    main_labels = sorted_labels[:5]
+    taus = list()
+    initial_tau = 2 * fwhm
+    for label in tqdm(main_labels, desc="Finding optimal taus", unit="component"):
+        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
+            edge_src=edge_src,
+            edge_dst=edge_dst,
+            edge_distances=edge_distances,
+            labels=labels,
+            label=label,
+            unique_nodes=unique_nodes)
+        _tau = find_optimal_tau(fwhm=fwhm,
+                                edge_src=_edge_src,
+                                edge_dst=_edge_dst,
+                                edge_distances=_edge_distances,
+                                shape=(len(_nodes),),
+                                initial_tau=initial_tau)
+        taus.append(_tau)
+        # update initial tau to the last estimated tau
+        initial_tau = _tau
+
+    if signal_data.ndim == 3:
+        signal_data = signal_data[..., None]
+
+    _shape = signal_data.shape
+
+    signal_data = signal_data.reshape(-1, signal_data.shape[-1])
+    # For a single timepoint, use low-memory mode so smoothing is applied per 1D vector.
+    if signal_data.shape[1] == 1:
+        low_memory = True
+    # smooth the background data with the mean estimated tau
+    smooth_component(
+        edge_src=edge_src,
+        edge_dst=edge_dst,
+        edge_distances=edge_distances,
+        signal_data=signal_data,
+        labels=labels,
+        label=sorted_labels[5:],  # smooth the rest of the components with the mean tau
+        unique_nodes=unique_nodes,
+        tau=np.mean(taus),  # Use the mean tau for all components
+        low_memory=low_memory
+    )
+    # smooth each main component with the estimated tau
+    for label, _tau in zip(main_labels, taus):
+        smooth_component(edge_src=edge_src,
+                         edge_dst=edge_dst,
+                         edge_distances=edge_distances,
+                         signal_data=signal_data,
+                         labels=labels,
+                         label=label,
+                         unique_nodes=unique_nodes,
+                         tau=_tau,
+                         low_memory=low_memory)
+
+    return signal_data
+
+
+
 def run_grid_resolution_experiment(
     aparc_file: str,
     brain_mask_file: str,
@@ -76,6 +158,7 @@ def run_grid_resolution_experiment(
     output_dir: str,
     voxel_sizes=None,
     random_seed: int = 0,
+    timepoints: int = 1,
 ):
     """
     Runs the experiment and returns a list of dict rows for CSV.
@@ -85,47 +168,83 @@ def run_grid_resolution_experiment(
     os.makedirs(output_dir, exist_ok=True)
     rng = np.random.default_rng(random_seed)
 
+    # Load input images once (assume aparc and brain mask are in same space)
+    aparc_img = nib.load(aparc_file)
+    brain_mask_image = nib.load(brain_mask_file)
+
     if voxel_sizes is None:
-        voxel_sizes = list(_frange(0.5, 4.0, 0.5))
+        voxel_sizes = list(_frange(1, 4.0, 1))[::-1]  # 4mm to 1mm
 
     rows = []
 
+    # surfaces list passed to create_graph
+    surface_files = [pial_l_file, pial_r_file, white_l_file, white_r_file]
+
     for voxel_size in voxel_sizes:
         # Build graph representation at this voxel size.
-        # Call create_graph with positional args (assume the function accepts these inputs)
-        create_graph_args = (
-            aparc_file,
-            brain_mask_file,
-            pial_l_file,
-            pial_r_file,
-            white_l_file,
-            white_r_file,
-            voxel_size,
-        )
-        graph, labelmap, meta = create_graph(*create_graph_args)  # type: ignore
+        # resample brain mask to desired voxel size
+        _affine = adjust_affine_spacing(brain_mask_image.affine,
+                                        np.asarray(voxel_size))
+        reference_data = resample_data_to_affine(brain_mask_image.get_fdata(),
+                                                 target_affine=_affine,
+                                                 original_affine=brain_mask_image.affine,
+                                                 interpolation="nearest")
+        _shape = reference_data.shape[:3]
+        reference_image = nib.Nifti1Image(reference_data, _affine)
+
+        mask_array = process_mask(brain_mask_file, reference_image, mask_dilation=3)
+        # create_graph expects (mask_array, image_affine, surface_files)
+        edge_src, edge_dst, edge_distances = create_graph(mask_array, reference_image.affine, surface_files)
+
+        labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
+
+        output_labelmap = os.path.join(output_dir, f"labelmap_{voxel_size}mm.nii.gz")
+        save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
+                      unique_nodes)
+
 
         # labelmap expected to encode aparc labels per voxel in graph space
-        label_arr = np.asarray(labelmap, dtype=np.int32)
+        aparg_img_resampled = resample_to_img(aparc_img, reference_image, interpolation='nearest', force_resample=True)
+        aparc_data = np.asarray(aparg_img_resampled.get_fdata())
+        label_arr = np.asarray(aparc_data, dtype=np.int32)
         gt_mask = np.asarray(label_arr == ground_truth_parcellation_label).ravel()
 
         # Simulate a single 3D volume (signal + noise) and use it as the map to smooth.
         tmap = simulate_volume(gt_mask, signal_amplitude, noise_std, rng)
 
-        # Smooth without resampling (operate on this graph/grid)
-        # use positional args for smooth_images
-        smoothed = smooth_images(graph, tmap, fwhm)  # type: ignore
+        # set voxels outside the brain mask to zero
+        tmap[~mask_array.ravel()] = 0.0
 
-        # Threshold: use 75th percentile of smoothed OR t>2.0, whichever is larger
-        p75 = float(np.percentile(smoothed, 75))
-        thr = max(2.0, p75)
+        # Smooth without resampling (operate on this graph/grid)
+        tmap_3d = tmap.reshape(label_arr.shape).astype(np.float32)
+
+        # save original tmap for reference
+        original_tmap_img = nib.Nifti1Image(tmap_3d, reference_image.affine)
+        original_tmap_path = os.path.join(output_dir, f"original_tmap_{voxel_size}mm.nii.gz")
+        nib.save(original_tmap_img, original_tmap_path)
+
+        smoothed = apply_estimated_gaussian_smoothing(
+            signal_data=tmap_3d,
+            edge_src=edge_src,
+            edge_dst=edge_dst,
+            edge_distances=edge_distances,
+            labels=labels,
+            sorted_labels=sorted_labels,
+            unique_nodes=unique_nodes,
+            fwhm=fwhm,
+            low_memory=False
+        ).ravel()
+
+        # save smoothed tmap for reference
+        smoothed_tmap_img = nib.Nifti1Image(smoothed.reshape(label_arr.shape), reference_image.affine)
+        smoothed_tmap_path = os.path.join(output_dir, f"smoothed_tmap_{voxel_size}mm.nii.gz")
+        nib.save(smoothed_tmap_img, smoothed_tmap_path)
+
+        # Threshold: 0.5; above is active
+        thr = 0.5
         pred_mask = smoothed > thr
 
         sens, spec, dice, tp, fp, tn, fn = compute_binary_metrics(gt_mask, pred_mask)
-
-        # Save predicted mask as a labelmap file for later inspection
-        out_labelmap = os.path.join(output_dir, f"pred_mask_{voxel_size}mm.nii.gz")
-        # call save_labelmap positionally; assume meta contains needed affine/metadata
-        save_labelmap(out_labelmap, pred_mask.reshape(label_arr.shape), meta)  # type: ignore
 
         row = {
             "voxel_size_mm": float(voxel_size),
@@ -139,7 +258,7 @@ def run_grid_resolution_experiment(
             "fn": int(fn),
             "n_voxels": int(gt_mask.size),
             "n_active_voxels": int(np.sum(gt_mask)),
-            "out_labelmap": out_labelmap,
+            "out_labelmap": output_labelmap,
         }
         rows.append(row)
 
@@ -155,19 +274,20 @@ def run_grid_resolution_experiment(
 
 
 def main():
-    aparc_file = os.path.abspath("./sub-MSC06_desc-aparcaseg_dseg.nii.gz")
-    brain_mask_file = os.path.abspath("./sub-MSC06_desc-brain_mask.nii.gz")
-    pial_l_file = os.path.abspath("./sub-MSC06_hemi-L_pial.surf.gii")
-    pial_r_file = os.path.abspath("./sub-MSC06_hemi-R_pial.surf.gii")
-    white_l_file = os.path.abspath("./sub-MSC06_hemi-L_white.surf.gii")
-    white_r_file = os.path.abspath("./sub-MSC06_hemi-R_white.surf.gii")
+    file_dir = os.path.dirname(os.path.abspath(__file__))
+    aparc_file = os.path.join(file_dir, "./sub-MSC06_desc-aparcaseg_dseg.nii.gz")
+    brain_mask_file = os.path.join(file_dir, "./sub-MSC06_desc-brain_mask.nii.gz")
+    pial_l_file = os.path.join(file_dir, "./sub-MSC06_hemi-L_pial.surf.gii")
+    pial_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_pial.surf.gii")
+    white_l_file = os.path.join(file_dir, "./sub-MSC06_hemi-L_white.surf.gii")
+    white_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_white.surf.gii")
 
     ground_truth_parcellation_label = 1035
     fwhm = 6.0
     signal_amplitude = 1.0
     noise_std = 2.0
 
-    output_dir = os.path.abspath("./grid_resolution_effect_outputs")
+    output_dir = os.path.join(file_dir, "./grid_resolution_effect_outputs")
 
     run_grid_resolution_experiment(
         aparc_file=aparc_file,
