@@ -15,11 +15,11 @@ The smallest voxel size is 1mm isotropic, and the largest is 4mm isotropic, with
 # paper/simulations/grid_resolution_effect.py
 import os
 import csv
-import json
 import numpy as np
 import nibabel as nib
 from tqdm import tqdm
 import argparse
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from nilearn.image import resample_to_img
@@ -489,6 +489,10 @@ def run_grid_resolution_experiment(
     gm_prob_file: str | None = None,
     plot_outputs: bool = True,
     plot_block_len: int = 7,
+    iteration_index: int = 0,
+    write_csv: bool = True,
+    output_csv_path: str | None = None,
+    save_images: bool = True,
 ):
     """
     Runs the experiment and returns a list of dict rows for CSV.
@@ -505,6 +509,8 @@ def run_grid_resolution_experiment(
     """
     os.makedirs(output_dir, exist_ok=True)
     rng = np.random.default_rng(random_seed)
+    if not save_images:
+        plot_outputs = False
 
     # Load input images once (assume aparc and brain mask are in same space)
     aparc_img = nib.load(aparc_file)
@@ -528,8 +534,9 @@ def run_grid_resolution_experiment(
         gt_data = np.asarray(gt_field_base_img.get_fdata(), dtype=float) * float(gt_amplitude)
         gt_field_base_img = nib.Nifti1Image(gt_data, gt_field_base_img.affine)
 
-    nib.save(gt_field_base_img, os.path.join(output_dir, "gt_field_base.nii.gz"))
-    nib.save(gt_label_mask_base_img, os.path.join(output_dir, "gt_label_mask_base.nii.gz"))
+    if save_images:
+        nib.save(gt_field_base_img, os.path.join(output_dir, "gt_field_base.nii.gz"))
+        nib.save(gt_label_mask_base_img, os.path.join(output_dir, "gt_label_mask_base.nii.gz"))
 
     if voxel_sizes is None:
         voxel_sizes = list(_frange(1, 4.0, 1))[::-1]  # 4mm to 1mm
@@ -579,13 +586,15 @@ def run_grid_resolution_experiment(
         labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
 
         component_densities = compute_component_graph_densities(edge_src, edge_dst, labels, unique_nodes)
-        component_densities_json = json.dumps(component_densities, sort_keys=True)
+        label_counts = dict(zip(*np.unique(labels, return_counts=True)))
 
         gm_component_labels: list[int] = []
 
-        output_labelmap = os.path.join(output_dir, f"labelmap_{voxel_size}mm.nii.gz")
-        save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
-                      unique_nodes)
+        output_labelmap = ""
+        if save_images:
+            output_labelmap = os.path.join(output_dir, f"labelmap_{voxel_size}mm.nii.gz")
+            save_labelmap(output_labelmap, reference_image.shape, reference_image.affine, labels, sorted_labels,
+                          unique_nodes)
 
         # Resample continuous GT field and label mask into this grid.
         gt_field_res = resample_to_img(gt_field_base_img, reference_image, interpolation="continuous", force_resample=True)
@@ -600,7 +609,8 @@ def run_grid_resolution_experiment(
 
         gt_field_img = nib.Nifti1Image(gt_field, reference_image.affine)
         gt_field_path = os.path.join(output_dir, f"gt_field_{voxel_size}mm.nii.gz")
-        nib.save(gt_field_img, gt_field_path)
+        if save_images:
+            nib.save(gt_field_img, gt_field_path)
 
         if gm_prob_img is not None:
             gm_prob_res = resample_to_img(gm_prob_img, reference_image, interpolation="continuous", force_resample=True)
@@ -635,7 +645,8 @@ def run_grid_resolution_experiment(
         # save original tmap for reference
         original_tmap_img = nib.Nifti1Image(raw_tmap_3d, reference_image.affine)
         original_tmap_path = os.path.join(output_dir, f"original_tmap_{voxel_size}mm.nii.gz")
-        nib.save(original_tmap_img, original_tmap_path)
+        if save_images:
+            nib.save(original_tmap_img, original_tmap_path)
 
         smoothed = apply_estimated_gaussian_smoothing(
             signal_data=tmap_3d,
@@ -654,7 +665,8 @@ def run_grid_resolution_experiment(
         # save smoothed tmap for reference
         smoothed_tmap_img = nib.Nifti1Image(smoothed_3d, reference_image.affine)
         smoothed_tmap_path = os.path.join(output_dir, f"smoothed_tmap_{voxel_size}mm.nii.gz")
-        nib.save(smoothed_tmap_img, smoothed_tmap_path)
+        if save_images:
+            nib.save(smoothed_tmap_img, smoothed_tmap_path)
 
         if plot_outputs and t1_img is not None and plot_surfaces is not None:
             center_z = _map_aparc_center_to_t1_z(aparc_img, t1_img, gt_center_ijk)
@@ -829,9 +841,15 @@ def run_grid_resolution_experiment(
         gm_smoothed_mean = float("nan")
         gm_smoothed_std = float("nan")
         if gm_component_labels:
-            gm_densities = [component_densities[int(lbl)] for lbl in gm_component_labels if int(lbl) in component_densities]
-            if gm_densities:
-                gm_component_density_mean = float(np.mean(gm_densities))
+            gm_densities = []
+            gm_weights = []
+            for lbl in gm_component_labels:
+                lbl_int = int(lbl)
+                if lbl_int in component_densities and lbl_int in label_counts:
+                    gm_densities.append(component_densities[lbl_int])
+                    gm_weights.append(int(label_counts[lbl_int]))
+            if gm_densities and gm_weights:
+                gm_component_density_mean = float(np.average(gm_densities, weights=gm_weights))
 
             gm_nodes = unique_nodes[np.isin(labels, gm_component_labels)]
             if gm_nodes.size > 0:
@@ -843,6 +861,7 @@ def run_grid_resolution_experiment(
                 gm_smoothed_std = float(np.std(gm_smoothed_vals))
 
         row = {
+            "iteration": int(iteration_index),
             "voxel_size_mm": float(voxel_size),
             "fwhm_mm": float(fwhm),
             "gt_fwhm_mm": float(gt_fwhm_mm),
@@ -854,8 +873,7 @@ def run_grid_resolution_experiment(
             "scale_noise_by_voxel_volume": bool(scale_noise_by_voxel_volume),
             "voxel_volume_mm3": float(voxel_volume),
             "noise_std_this": float(noise_std_this),
-            "component_graph_densities": component_densities_json,
-            "gm_component_density_mean": float(gm_component_density_mean),
+            "gm_component_density_weighted": float(gm_component_density_mean),
             "gm_raw_mean": float(gm_raw_mean),
             "gm_raw_std": float(gm_raw_std),
             "gm_smoothed_mean": float(gm_smoothed_mean),
@@ -979,14 +997,32 @@ def run_grid_resolution_experiment(
         plt.close(fig)
 
     # Write CSV summary
-    if rows:
-        csv_path = os.path.join(output_dir, "grid_resolution_effect_summary.csv")
+    if write_csv and rows:
+        csv_path = output_csv_path or os.path.join(output_dir, "grid_resolution_effect_summary.csv")
         with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             writer.writeheader()
             writer.writerows(rows)
 
     return rows
+
+
+def sample_gm_center_from_aparc(
+    aparc_img: nib.Nifti1Image,
+    rng: np.random.Generator,
+    gm_label_min: int = 1000,
+    gm_label_max: int = 2999,
+) -> tuple[tuple[int, int, int], int]:
+    """Sample a random GM voxel (label in 1000s/2000s) from aparc space."""
+    aparc_data = np.asarray(aparc_img.get_fdata(), dtype=np.int32)
+    gm_mask = (aparc_data >= int(gm_label_min)) & (aparc_data <= int(gm_label_max))
+    gm_indices = np.argwhere(gm_mask)
+    if gm_indices.size == 0:
+        raise ValueError("No GM voxels found in aparc for labels 1000-2999")
+    idx = int(rng.integers(0, gm_indices.shape[0]))
+    center = tuple(int(v) for v in gm_indices[idx])
+    label = int(aparc_data[center])
+    return center, label
 
 
 def main():
@@ -1027,10 +1063,49 @@ def main():
         help="Disable voxel-volume scaling for noise std",
     )
     parser.add_argument(
+        "--random-gt-center",
+        action="store_true",
+        help="Randomly sample GT center from GM-labeled aparc voxels (1000s/2000s)",
+    )
+    parser.add_argument(
+        "--n-iters",
+        type=int,
+        default=1,
+        help="Number of iterations with random GT center sampling",
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=0,
+        help="Random seed for GT center sampling and noise",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=os.path.join(file_dir, "./grid_resolution_effect_outputs"),
         help="Base output directory; a run-specific subfolder will be created",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=None,
+        help="Path to the combined summary CSV (defaults under output dir)",
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Do not write any image outputs (labelmaps, NIfTI maps, plots)",
+    )
+    parser.add_argument(
+        "--mp-iters",
+        action="store_true",
+        help="Use multiprocessing across iterations",
+    )
+    parser.add_argument(
+        "--mp-processes",
+        type=int,
+        default=None,
+        help="Number of worker processes for --mp-iters (default: os.cpu_count())",
     )
     args = parser.parse_args()
 
@@ -1041,14 +1116,13 @@ def main():
 
     gt_center_ijk = tuple(int(v) for v in args.gt_center)
 
+    aparc_img = nib.load(aparc_file)
     if args.infer_label_from_gt_center:
-        aparc_img = nib.load(aparc_file)
         aparc_data = np.asarray(aparc_img.get_fdata(), dtype=np.int32)
         i, j, k = gt_center_ijk
         if not (0 <= i < aparc_data.shape[0] and 0 <= j < aparc_data.shape[1] and 0 <= k < aparc_data.shape[2]):
             raise ValueError(f"gt_center {gt_center_ijk} is out of bounds for aparc shape={aparc_data.shape}")
-        inferred_label = int(aparc_data[i, j, k])
-        ground_truth_parcellation_label = inferred_label
+        ground_truth_parcellation_label = int(aparc_data[i, j, k])
 
     def _fmt_float(value: float) -> str:
         return f"{value:.3g}".replace(".", "p")
@@ -1060,28 +1134,75 @@ def main():
         f"amp{_fmt_float(args.gt_amplitude)}_"
         f"noise{'Unscaled' if args.no_scale_noise_std else 'Scaled'}"
     )
+    if args.random_gt_center:
+        run_id = f"{run_id}_randomGM"
+    if args.n_iters > 1:
+        run_id = f"{run_id}_iters{args.n_iters}"
+
     output_dir = os.path.join(args.output_dir, run_id)
+    os.makedirs(output_dir, exist_ok=True)
 
-    run_grid_resolution_experiment(
-        aparc_file=aparc_file,
-        brain_mask_file=brain_mask_file,
-        pial_l_file=pial_l_file,
-        pial_r_file=pial_r_file,
-        white_l_file=white_l_file,
-        white_r_file=white_r_file,
-        ground_truth_parcellation_label=ground_truth_parcellation_label,
-        fwhm=fwhm,
-        signal_amplitude=signal_amplitude,
-        noise_std=noise_std,
-        output_dir=output_dir,
-        gt_amplitude=args.gt_amplitude,
-        t1w_file=t1w_file,
-        gm_prob_file=gm_prob_file,
-        gt_center_ijk=gt_center_ijk,
-        gt_fwhm_mm=float(args.gt_fwhm),
-        scale_noise_by_voxel_volume=not args.no_scale_noise_std,
-    )
+    rng = np.random.default_rng(int(args.random_seed))
+    all_rows = []
+    n_iters = max(1, int(args.n_iters))
 
+    iter_configs = []
+    for iter_idx in range(n_iters):
+        if args.random_gt_center:
+            gt_center_ijk, ground_truth_parcellation_label = sample_gm_center_from_aparc(aparc_img, rng)
+        iter_dir = output_dir
+        if n_iters > 1:
+            iter_dir = os.path.join(output_dir, f"iter_{iter_idx:03d}_gt{gt_center_ijk[0]}-{gt_center_ijk[1]}-{gt_center_ijk[2]}")
+        iter_configs.append(
+            dict(
+                aparc_file=aparc_file,
+                brain_mask_file=brain_mask_file,
+                pial_l_file=pial_l_file,
+                pial_r_file=pial_r_file,
+                white_l_file=white_l_file,
+                white_r_file=white_r_file,
+                ground_truth_parcellation_label=ground_truth_parcellation_label,
+                fwhm=fwhm,
+                signal_amplitude=signal_amplitude,
+                noise_std=noise_std,
+                output_dir=iter_dir,
+                gt_amplitude=args.gt_amplitude,
+                t1w_file=t1w_file,
+                gm_prob_file=gm_prob_file,
+                gt_center_ijk=gt_center_ijk,
+                gt_fwhm_mm=float(args.gt_fwhm),
+                scale_noise_by_voxel_volume=not args.no_scale_noise_std,
+                iteration_index=iter_idx,
+                write_csv=False,
+                random_seed=int(args.random_seed) + iter_idx,
+                save_images=not args.no_images,
+                plot_outputs=not args.no_images,
+            )
+        )
+
+    if args.mp_iters and n_iters > 1:
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(processes=args.mp_processes) as pool:
+            results = pool.map(_run_iteration_worker, iter_configs)
+        for rows in results:
+            all_rows.extend(rows)
+    else:
+        for cfg in iter_configs:
+            rows = run_grid_resolution_experiment(**cfg)
+            all_rows.extend(rows)
+
+    if all_rows:
+        csv_path = args.output_csv or os.path.join(output_dir, "grid_resolution_effect_summary.csv")
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(all_rows)
+
+
+def _run_iteration_worker(cfg):
+    # Helper for multiprocessing: must be top-level for pickling.
+    return run_grid_resolution_experiment(**cfg)
 
 if __name__ == "__main__":
     main()
+
