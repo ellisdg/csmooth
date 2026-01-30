@@ -305,7 +305,7 @@ def _centered_slice_block(center_z: int, n_slices: int, block_len: int) -> list[
 
 
 def _plot_value_range(data: np.ndarray, mask: np.ndarray | None = None,
-                      lower_q: float = 70.0, upper_q: float = 99.0, thr_q: float = 85.0) -> tuple[float, float, float]:
+                      lower_q: float = 70.0, upper_q: float = 99.0, thr_q: float = 75.0) -> tuple[float, float, float]:
     """Compute vmin/vmax/threshold for stat map plotting using robust percentiles."""
     vals = data[mask] if mask is not None else data
     vals = vals[np.isfinite(vals)]
@@ -473,13 +473,13 @@ def run_grid_resolution_experiment(
     noise_std: float,
     output_dir: str,
     voxel_sizes=None,
-    random_seed: int = 0,
+    random_seed: int | None = None,
     timepoints: int = 1,
     *,
     # New controls for continuous GT + comparable noise
     gt_center_ijk: tuple[int, int, int] = (70, 157, 147),
     gt_fwhm_mm: float | None = None,
-    threshold_quantile_within_gt: float = 0.85,
+    threshold_quantile_within_gt: float = 0.75,
     reference_voxel_volume_mm3: float = 1.0,
     gt_amplitude: float = 2.0,
     # Noise scaling control
@@ -508,7 +508,7 @@ def run_grid_resolution_experiment(
       - Per-voxel noise is scaled by sqrt(Vref / V).
     """
     os.makedirs(output_dir, exist_ok=True)
-    rng = np.random.default_rng(random_seed)
+    rng = np.random.default_rng() if random_seed is None else np.random.default_rng(random_seed)
     if not save_images:
         plot_outputs = False
 
@@ -908,7 +908,7 @@ def run_grid_resolution_experiment(
         rows.append(row)
 
     if plot_outputs and t1_img is not None and plot_surfaces is not None and combined_items:
-        combined_items = sorted(combined_items, key=lambda item: item["voxel_size"])
+        combined_items = sorted(combined_items, key=lambda item: -item["voxel_size"])  # largest to smallest
         n_cols = len(combined_items)
         fig, axs = plt.subplots(3, n_cols, figsize=(3.0 * n_cols, 8.5))
         fig.patch.set_facecolor("black")
@@ -1025,19 +1025,32 @@ def sample_gm_center_from_aparc(
     return center, label
 
 
+def run_grid_resolution_experiment_single(cfg: dict):
+    """Helper wrapper for running one iteration config.
+
+    Accepts a dict of keyword arguments, calls run_grid_resolution_experiment, and
+    returns the list of rows produced. Kept as a top-level function so it is picklable
+    for multiprocessing.Pool.
+    """
+    # Defensive copy to avoid accidental mutation by callers
+    cfg2 = dict(cfg)
+    # Extract and pop out keys that might not be accepted by the worker
+    return run_grid_resolution_experiment(**cfg2)
+
+
 def main():
     file_dir = os.path.dirname(os.path.abspath(__file__))
-    t1w_file = os.path.join(file_dir, "./sub-MSC06_desc-preproc_T1w.nii.gz")
-    aparc_file = os.path.join(file_dir, "./sub-MSC06_desc-aparcaseg_dseg.nii.gz")
-    brain_mask_file = os.path.join(file_dir, "./sub-MSC06_desc-brain_mask.nii.gz")
-    pial_l_file = os.path.join(file_dir, "./sub-MSC06_hemi-L_pial.surf.gii")
-    pial_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_pial.surf.gii")
-    white_l_file = os.path.join(file_dir, "./sub-MSC06_hemi-L_white.surf.gii")
-    white_r_file = os.path.join(file_dir, "./sub-MSC06_hemi-R_white.surf.gii")
-    gm_prob_file = os.path.join(file_dir, "./sub-MSC06_label-GM_probseg.nii.gz")
+    t1w_file = os.path.join(file_dir, "data/sub-MSC06_desc-preproc_T1w.nii.gz")
+    aparc_file = os.path.join(file_dir, "data/sub-MSC06_desc-aparcaseg_dseg.nii.gz")
+    brain_mask_file = os.path.join(file_dir, "data/sub-MSC06_desc-brain_mask.nii.gz")
+    pial_l_file = os.path.join(file_dir, "data/sub-MSC06_hemi-L_pial.surf.gii")
+    pial_r_file = os.path.join(file_dir, "data/sub-MSC06_hemi-R_pial.surf.gii")
+    white_l_file = os.path.join(file_dir, "data/sub-MSC06_hemi-L_white.surf.gii")
+    white_r_file = os.path.join(file_dir, "data/sub-MSC06_hemi-R_white.surf.gii")
+    gm_prob_file = os.path.join(file_dir, "data/sub-MSC06_label-GM_probseg.nii.gz")
 
     parser = argparse.ArgumentParser(description="Run grid resolution GT simulation")
-    parser.add_argument("--gt-amplitude", type=float, default=2.0, help="Amplitude multiplier for GT field")
+    parser.add_argument("--gt-amplitude", type=float, default=4.0, help="Amplitude multiplier for GT field")
     parser.add_argument(
         "--gt-center",
         type=int,
@@ -1049,7 +1062,7 @@ def main():
     parser.add_argument(
         "--gt-fwhm",
         type=float,
-        default=6.0,
+        default=16.0,
         help="GT Gaussian FWHM in mm (overrides default fwhm)",
     )
     parser.add_argument(
@@ -1076,8 +1089,8 @@ def main():
     parser.add_argument(
         "--random-seed",
         type=int,
-        default=0,
-        help="Random seed for GT center sampling and noise",
+        default=None,
+        help="Random seed for GT center sampling and noise (if omitted, runs are randomized)",
     )
     parser.add_argument(
         "--output-dir",
@@ -1127,6 +1140,17 @@ def main():
     def _fmt_float(value: float) -> str:
         return f"{value:.3g}".replace(".", "p")
 
+    # Master RNG: if the user supplied a seed use it (deterministic across runs), otherwise
+    # create an unseeded generator so each invocation (and each iteration by default) is random.
+    if args.random_seed is None:
+        master_rng = np.random.default_rng()
+    else:
+        master_rng = np.random.default_rng(int(args.random_seed))
+
+    # If we're doing a single random iteration, sample the GT center now so the output folder matches it.
+    if args.random_gt_center and int(args.n_iters) == 1:
+        gt_center_ijk, ground_truth_parcellation_label = sample_gm_center_from_aparc(aparc_img, master_rng)
+
     run_id = (
         f"fwhm{_fmt_float(fwhm)}_"
         f"gtfwhm{_fmt_float(args.gt_fwhm)}_"
@@ -1134,7 +1158,11 @@ def main():
         f"amp{_fmt_float(args.gt_amplitude)}_"
         f"noise{'Unscaled' if args.no_scale_noise_std else 'Scaled'}"
     )
-    if args.random_gt_center:
+    if args.random_gt_center and int(args.n_iters) > 1:
+        run_id = run_id.replace(
+            f"gt{gt_center_ijk[0]}-{gt_center_ijk[1]}-{gt_center_ijk[2]}_",
+            "gt-random_",
+        )
         run_id = f"{run_id}_randomGM"
     if args.n_iters > 1:
         run_id = f"{run_id}_iters{args.n_iters}"
@@ -1142,67 +1170,77 @@ def main():
     output_dir = os.path.join(args.output_dir, run_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    rng = np.random.default_rng(int(args.random_seed))
     all_rows = []
     n_iters = max(1, int(args.n_iters))
 
     iter_configs = []
     for iter_idx in range(n_iters):
+        # sample a GT center for this iteration using the master RNG (seeded or not)
         if args.random_gt_center:
-            gt_center_ijk, ground_truth_parcellation_label = sample_gm_center_from_aparc(aparc_img, rng)
+            gt_center_ijk, ground_truth_parcellation_label = sample_gm_center_from_aparc(aparc_img, master_rng)
         iter_dir = output_dir
         if n_iters > 1:
             iter_dir = os.path.join(output_dir, f"iter_{iter_idx:03d}_gt{gt_center_ijk[0]}-{gt_center_ijk[1]}-{gt_center_ijk[2]}")
+        # decide per-iteration seed: if user supplied a base seed, make per-iteration deterministic
+        if args.random_seed is None:
+            iter_seed = None
+        else:
+            iter_seed = int(args.random_seed) + iter_idx
+
         iter_configs.append(
-            dict(
-                aparc_file=aparc_file,
-                brain_mask_file=brain_mask_file,
-                pial_l_file=pial_l_file,
-                pial_r_file=pial_r_file,
-                white_l_file=white_l_file,
-                white_r_file=white_r_file,
-                ground_truth_parcellation_label=ground_truth_parcellation_label,
-                fwhm=fwhm,
-                signal_amplitude=signal_amplitude,
-                noise_std=noise_std,
-                output_dir=iter_dir,
-                gt_amplitude=args.gt_amplitude,
-                t1w_file=t1w_file,
-                gm_prob_file=gm_prob_file,
-                gt_center_ijk=gt_center_ijk,
-                gt_fwhm_mm=float(args.gt_fwhm),
-                scale_noise_by_voxel_volume=not args.no_scale_noise_std,
-                iteration_index=iter_idx,
-                write_csv=False,
-                random_seed=int(args.random_seed) + iter_idx,
-                save_images=not args.no_images,
-                plot_outputs=not args.no_images,
-            )
-        )
+             dict(
+                 aparc_file=aparc_file,
+                 brain_mask_file=brain_mask_file,
+                 pial_l_file=pial_l_file,
+                 pial_r_file=pial_r_file,
+                 white_l_file=white_l_file,
+                 white_r_file=white_r_file,
+                 ground_truth_parcellation_label=ground_truth_parcellation_label,
+                 fwhm=fwhm,
+                 signal_amplitude=signal_amplitude,
+                 noise_std=noise_std,
+                 output_dir=iter_dir,
+                 gt_amplitude=args.gt_amplitude,
+                 t1w_file=t1w_file,
+                 gm_prob_file=gm_prob_file,
+                 gt_center_ijk=gt_center_ijk,
+                 gt_fwhm_mm=float(args.gt_fwhm),
+                 scale_noise_by_voxel_volume=not args.no_scale_noise_std,
+                 iteration_index=iter_idx,
+                 write_csv=False,
+                 random_seed=iter_seed,
+                 save_images=not args.no_images,
+                 plot_outputs=not args.no_images,
+             )
+         )
 
-    if args.mp_iters and n_iters > 1:
-        ctx = mp.get_context("spawn")
+    # Run each iteration config
+    if args.mp_iters:
+        # Multiprocessing across iterations. Use 'spawn' to avoid inheriting RNG state from parent.
+        ctx = mp.get_context('spawn')
         with ctx.Pool(processes=args.mp_processes) as pool:
-            results = pool.map(_run_iteration_worker, iter_configs)
-        for rows in results:
-            all_rows.extend(rows)
+            all_rows = pool.map(run_grid_resolution_experiment_single, iter_configs)
     else:
-        for cfg in iter_configs:
-            rows = run_grid_resolution_experiment(**cfg)
-            all_rows.extend(rows)
+        # Serial execution: keep shape consistent with multiprocessing (list of per-iteration lists)
+        for config in iter_configs:
+            rows = run_grid_resolution_experiment_single(config)
+            all_rows.append(rows)
 
-    if all_rows:
-        csv_path = args.output_csv or os.path.join(output_dir, "grid_resolution_effect_summary.csv")
+    # Combine all rows into a single list for CSV output
+    combined_rows = []
+    for run_rows in all_rows:
+        combined_rows.extend(run_rows)
+
+    # Write combined CSV summary
+    if combined_rows:
+        csv_path = args.output_csv or os.path.join(output_dir, "grid_resolution_effect_summary_combined.csv")
         with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
+            writer = csv.DictWriter(f, fieldnames=list(combined_rows[0].keys()))
             writer.writeheader()
-            writer.writerows(all_rows)
+            writer.writerows(combined_rows)
 
+    return combined_rows
 
-def _run_iteration_worker(cfg):
-    # Helper for multiprocessing: must be top-level for pickling.
-    return run_grid_resolution_experiment(**cfg)
 
 if __name__ == "__main__":
     main()
-

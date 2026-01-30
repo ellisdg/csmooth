@@ -50,6 +50,10 @@ def plot_mri_with_contours(
     surface_thickness=0.75,  # <-- Add surface thickness argument
     ax=None,  # <-- new argument
     crop_percentile=50,  # <-- new argument for cropping
+    crop_bounds=None,  # <-- optional (min_y, min_x, max_y, max_x) in slice coords
+    crop_stat_map_threshold=None,  # <-- optional threshold for stat-map-based cropping
+    crop_padding=0,  # <-- optional padding (pixels) for crop_bounds
+    crop_enabled=True,
     stat_map_vmin=None,  # <-- new argument
     stat_map_vmax=None,  # <-- new argument
     colorbar=False,      # <-- new argument
@@ -179,6 +183,35 @@ def plot_mri_with_contours(
     path_effects = [patheffects.withStroke(linewidth=4, foreground="k", alpha=0.75)]
     figs = []
     # If ax is provided, plot only one slice into that axis
+    def _resolve_crop_bounds(dat_slice, stat_slice=None):
+        if not crop_enabled:
+            return 0, 0, dat_slice.shape[0] - 1, dat_slice.shape[1] - 1
+        if crop_bounds is not None:
+            min_y, min_x, max_y, max_x = crop_bounds
+            return int(min_y), int(min_x), int(max_y), int(max_x)
+        if stat_slice is not None:
+            thr = stat_map_threshold if crop_stat_map_threshold is None else crop_stat_map_threshold
+            stat_mask = np.isfinite(stat_slice) & (stat_slice >= thr)
+            if np.any(stat_mask):
+                coords = np.argwhere(stat_mask)
+                min_y, min_x = coords.min(axis=0)
+                max_y, max_x = coords.max(axis=0)
+                if crop_padding:
+                    min_y = max(0, int(min_y) - int(crop_padding))
+                    min_x = max(0, int(min_x) - int(crop_padding))
+                    max_y = min(stat_slice.shape[0] - 1, int(max_y) + int(crop_padding))
+                    max_x = min(stat_slice.shape[1] - 1, int(max_x) + int(crop_padding))
+                return int(min_y), int(min_x), int(max_y), int(max_x)
+        bg_thresh = np.percentile(dat_slice, crop_percentile)
+        mask = dat_slice > bg_thresh
+        if np.any(mask):
+            coords = np.argwhere(mask)
+            min_y, min_x = coords.min(axis=0)
+            max_y, max_x = coords.max(axis=0)
+            return int(min_y), int(min_x), int(max_y), int(max_x)
+        return 0, 0, dat_slice.shape[0] - 1, dat_slice.shape[1] - 1
+
+    # If ax is provided, plot only one slice into that axis
     if ax is not None:
         # Only plot the first slice in slices
         sl = slices[0]
@@ -186,24 +219,15 @@ def plot_mri_with_contours(
         slicer[axis] = sl
         dat = data[tuple(slicer)].T
 
-        # --- Cropping logic ---
-        bg_thresh = np.percentile(dat, crop_percentile)
-        mask = dat > bg_thresh
-        if np.any(mask):
-            coords = np.argwhere(mask)
-            min_y, min_x = coords.min(axis=0)
-            max_y, max_x = coords.max(axis=0)
-            dat_cropped = dat[min_y:max_y+1, min_x:max_x+1]
-        else:
-            min_y, min_x, max_y, max_x = 0, 0, dat.shape[0]-1, dat.shape[1]-1
-            dat_cropped = dat
+        stat_slice = stat_data[tuple(slicer)].T if stat_data is not None else None
+        min_y, min_x, max_y, max_x = _resolve_crop_bounds(dat, stat_slice)
+        dat_cropped = dat[min_y:max_y + 1, min_x:max_x + 1]
 
         # Plot MRI
         ax.imshow(dat_cropped, cmap=plt.cm.gray, origin="lower", alpha=mri_alpha)
 
         # Plot stat map overlay
         if stat_data is not None:
-            stat_slice = stat_data[tuple(slicer)].T
             stat_slice_cropped = stat_slice[min_y:max_y+1, min_x:max_x+1]
             stat_mask = np.isfinite(stat_slice_cropped) & (stat_slice_cropped >= stat_map_threshold)
             if np.any(stat_mask):
@@ -227,6 +251,7 @@ def plot_mri_with_contours(
         ax.set_autoscale_on(False)
         ax.axis("off")
         ax.set_aspect("equal")
+        ax.set_facecolor("black")
 
         # Plot contours
         for surf, color in surfs:
@@ -358,24 +383,15 @@ def plot_mri_with_contours(
         slicer[axis] = sl
         dat = data[tuple(slicer)].T
 
-        # --- Cropping logic ---
-        bg_thresh = np.percentile(dat, crop_percentile)
-        mask = dat > bg_thresh
-        if np.any(mask):
-            coords = np.argwhere(mask)
-            min_y, min_x = coords.min(axis=0)
-            max_y, max_x = coords.max(axis=0)
-            dat_cropped = dat[min_y:max_y+1, min_x:max_x+1]
-        else:
-            min_y, min_x, max_y, max_x = 0, 0, dat.shape[0]-1, dat.shape[1]-1
-            dat_cropped = dat
+        stat_slice = stat_data[tuple(slicer)].T if stat_data is not None else None
+        min_y, min_x, max_y, max_x = _resolve_crop_bounds(dat, stat_slice)
+        dat_cropped = dat[min_y:max_y + 1, min_x:max_x + 1]
 
         # Plot MRI
         plot_ax.imshow(dat_cropped, cmap=plt.cm.gray, origin="lower", alpha=mri_alpha)
 
         # Plot stat map overlay
         if stat_data is not None:
-            stat_slice = stat_data[tuple(slicer)].T
             stat_slice_cropped = stat_slice[min_y:max_y+1, min_x:max_x+1]
             stat_mask = np.isfinite(stat_slice_cropped) & (stat_slice_cropped >= stat_map_threshold)
             if np.any(stat_mask):
@@ -399,6 +415,7 @@ def plot_mri_with_contours(
         plot_ax.set_autoscale_on(False)
         plot_ax.axis("off")
         plot_ax.set_aspect("equal")
+        plot_ax.set_facecolor("black")
 
         # Plot contours
         for surf, color in surfs:
@@ -553,6 +570,9 @@ def plot_multiple_stat_maps(
     stat_map_vmin=None,  # <-- new argument
     stat_map_vmax=None,  # <-- new argument
     colorbar=False,      # <-- new argument
+    crop_map_fname=None,
+    crop_stat_map_threshold=None,
+    crop_padding=0,
 ):
     """
     Plot multiple statistical maps on MRI contours and combine into a large figure.
@@ -579,8 +599,45 @@ def plot_multiple_stat_maps(
         squeeze=False
     )
     fig.patch.set_facecolor("black")
+    crop_bounds_by_slice = None
+    if crop_map_fname is not None and slices is not None:
+        mri_img = nib.load(mri_fname)
+        crop_img = nib.load(crop_map_fname)
+        if not np.allclose(crop_img.affine, mri_img.affine):
+            crop_img = nilearn.image.resample_to_img(
+                crop_img,
+                mri_img,
+                interpolation=stat_map_interpolation,
+                force_resample=True,
+                copy_header=True,
+            )
+        crop_data = crop_img.get_fdata()
+        axis, x, y = _mri_orientation(orientation)
+        slicer = [slice(None)] * 3
+        crop_bounds_by_slice = {}
+        thr = stat_map_threshold if crop_stat_map_threshold is None else crop_stat_map_threshold
+        for sl in slices:
+            slicer[axis] = sl
+            stat_slice = crop_data[tuple(slicer)].T
+            stat_mask = np.isfinite(stat_slice) & (stat_slice >= thr)
+            if np.any(stat_mask):
+                coords = np.argwhere(stat_mask)
+                min_y, min_x = coords.min(axis=0)
+                max_y, max_x = coords.max(axis=0)
+                if crop_padding:
+                    min_y = max(0, int(min_y) - int(crop_padding))
+                    min_x = max(0, int(min_x) - int(crop_padding))
+                    max_y = min(stat_slice.shape[0] - 1, int(max_y) + int(crop_padding))
+                    max_x = min(stat_slice.shape[1] - 1, int(max_x) + int(crop_padding))
+                crop_bounds_by_slice[int(sl)] = (int(min_y), int(min_x), int(max_y), int(max_x))
+            else:
+                crop_bounds_by_slice[int(sl)] = (0, 0, stat_slice.shape[0] - 1, stat_slice.shape[1] - 1)
+
     for i, stat_map_fname in enumerate(stat_map_fnames):
         for j, sl in enumerate(slices):
+            crop_bounds = None
+            if crop_bounds_by_slice is not None:
+                crop_bounds = crop_bounds_by_slice.get(int(sl))
             plot_mri_with_contours(
                 mri_fname=mri_fname,
                 surfaces=surfaces,
@@ -601,9 +658,13 @@ def plot_multiple_stat_maps(
                 stat_map_vmin=stat_map_vmin,
                 stat_map_vmax=stat_map_vmax,
                 colorbar=(colorbar and j == n_slices - 1),  # show colorbar on last column only
+                crop_bounds=crop_bounds,
+                crop_stat_map_threshold=crop_stat_map_threshold,
+                crop_padding=crop_padding,
             )
             axs[i, j].set_axis_off()
             axs[i, j].set_aspect("equal")
+            axs[i, j].set_facecolor("black")
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout(pad=0)
     if show:
