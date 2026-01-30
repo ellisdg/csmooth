@@ -42,8 +42,9 @@ import nibabel as nib
 
 from csmooth.graph import create_graph
 from csmooth.components import identify_connected_components
-from csmooth.smooth import process_mask, select_nodes, find_optimal_tau, smooth_component
-from csmooth.affine import adjust_affine_spacing
+from csmooth.smooth import select_nodes, find_optimal_tau, smooth_component
+from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
+from csmooth.fwhm import estimate_fwhm
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class GraphData:
     edge_dst: np.ndarray
     edge_distances: np.ndarray
     labels: np.ndarray
+    sorted_labels: np.ndarray
 
 
 def _voxel_centers_mm(shape3: tuple[int, int, int], affine: np.ndarray) -> np.ndarray:
@@ -72,14 +74,17 @@ def _build_graph_for_voxel_size(
 ) -> GraphData:
     """Build graph at a given voxel size using the same core pipeline as the main simulation."""
 
-    target_affine = adjust_affine_spacing(brain_mask_img.affine, float(voxel_size_mm))
+    orig_affine = brain_mask_img.affine.copy()
+    target_affine = adjust_affine_spacing(orig_affine, float(voxel_size_mm))
 
-    # We resample the mask using `process_mask` which is what the main script does.
-    mask_3d, affine = process_mask(
-        brain_mask_img=brain_mask_img,
-        target_affine=target_affine,
-        resample_interpolation="nearest",
-    )
+    # resample the mask data array to the target affine
+    mask_array = brain_mask_img.get_fdata()
+    mask_array = resample_data_to_affine(data=mask_array,
+                                         target_affine=target_affine,
+                                         original_affine=orig_affine,
+                                         interpolation="continuous")
+    mask_array = mask_array > 0.5
+    affine = target_affine
 
     # `create_graph` depends on surface files in the main simulation; keep that pathway.
     if surfaces is None:
@@ -87,27 +92,23 @@ def _build_graph_for_voxel_size(
 
     pial_l_file, pial_r_file, white_l_file, white_r_file = surfaces
     edge_src, edge_dst, edge_distances = create_graph(
-        mask_3d=mask_3d,
-        affine=affine,
-        pial_l_file=pial_l_file,
-        pial_r_file=pial_r_file,
-        white_l_file=white_l_file,
-        white_r_file=white_r_file,
+        mask_array=mask_array,
+        image_affine=affine,
+        surface_files=(pial_l_file, pial_r_file, white_l_file, white_r_file)
     )
 
-    unique_nodes = select_nodes(mask_3d)
-    # Connected components on the graph
-    labels, _ = identify_connected_components(unique_nodes, edge_src, edge_dst)
+    labels, sorted_labels, unique_nodes = identify_connected_components(edge_src, edge_dst)
 
     return GraphData(
         voxel_size_mm=float(voxel_size_mm),
         affine=np.asarray(affine),
-        mask_3d=np.asarray(mask_3d).astype(bool),
+        mask_3d=np.asarray(mask_array).astype(bool),
         unique_nodes=np.asarray(unique_nodes).astype(int),
         edge_src=np.asarray(edge_src).astype(int),
         edge_dst=np.asarray(edge_dst).astype(int),
         edge_distances=np.asarray(edge_distances).astype(float),
         labels=np.asarray(labels).astype(int),
+        sorted_labels=np.asarray(sorted_labels).astype(int)
     )
 
 
@@ -198,25 +199,28 @@ def _gm_nodes_from_probseg(g: GraphData, gm_prob_img: nib.Nifti1Image, gm_thresh
     gm_prob = np.asarray(gm_res.get_fdata(), dtype=float)
 
     gm_mask = (gm_prob >= float(gm_threshold)) & g.mask_3d
-    gm_nodes = select_nodes(gm_mask)
+    gm_nodes = np.flatnonzero(gm_mask.ravel())
     return np.asarray(gm_nodes).astype(int)
 
 
 def _estimate_tau_for_fwhm(g: GraphData, fwhm_mm: float, n_components: int = 5) -> dict[int, float]:
-    # identify component labels (biggest first)
-    unique_labels, counts = np.unique(g.labels, return_counts=True)
-    order = np.argsort(-counts)
-    top_labels = unique_labels[order][: int(n_components)]
 
     tau_by_label: dict[int, float] = {}
-    for lbl in top_labels:
-        comp_nodes = g.unique_nodes[g.labels == lbl]
-        tau = find_optimal_tau(
-            component_nodes=comp_nodes,
+    for lbl in g.sorted_labels[:n_components]:
+        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src=g.edge_src,
             edge_dst=g.edge_dst,
             edge_distances=g.edge_distances,
-            fwhm_mm=float(fwhm_mm),
+            labels=g.labels,
+            label=lbl,
+            unique_nodes=g.unique_nodes,
+        )
+        tau = find_optimal_tau(
+            fwhm=fwhm_mm,
+            edge_src=_edge_src,
+            edge_dst=_edge_dst,
+            edge_distances=_edge_distances,
+            shape=(len(_nodes),)
         )
         tau_by_label[int(lbl)] = float(tau)
 
@@ -226,7 +230,7 @@ def _estimate_tau_for_fwhm(g: GraphData, fwhm_mm: float, n_components: int = 5) 
     else:
         default_tau = float("nan")
 
-    for lbl in unique_labels:
+    for lbl in np.unique(g.labels):
         if int(lbl) not in tau_by_label:
             tau_by_label[int(lbl)] = default_tau
 
@@ -234,7 +238,11 @@ def _estimate_tau_for_fwhm(g: GraphData, fwhm_mm: float, n_components: int = 5) 
 
 
 def _smooth_noise_on_graph(g: GraphData, tau_by_label: dict[int, float], noise: np.ndarray) -> np.ndarray:
-    sm = np.full(noise.shape, np.nan, dtype=float)
+    if noise.ndim != 1:
+        raise ValueError(f"Expected 1D noise vector, got shape={noise.shape}")
+
+    sm = noise.copy()
+    sm2d = sm[:, None]
 
     # smooth each component separately (as in the main script)
     for lbl in np.unique(g.labels):
@@ -246,34 +254,79 @@ def _smooth_noise_on_graph(g: GraphData, tau_by_label: dict[int, float], noise: 
         if not np.isfinite(tau):
             continue
 
-        out = smooth_component(
-            component_nodes=nodes,
+        smooth_component(
             edge_src=g.edge_src,
             edge_dst=g.edge_dst,
             edge_distances=g.edge_distances,
-            values=noise,
+            signal_data=sm2d,
+            labels=g.labels,
+            label=lbl_int,
+            unique_nodes=g.unique_nodes,
             tau=tau,
         )
-        sm[nodes] = out[nodes]
 
-    return sm
+    return sm2d[:, 0]
+
+
+def _estimate_fwhm_for_top_components(
+    g: GraphData,
+    smoothed: np.ndarray,
+    n_components: int = 5,
+) -> list[tuple[int, float]]:
+    results: list[tuple[int, float]] = []
+    if smoothed.ndim != 1:
+        raise ValueError(f"Expected 1D smoothed vector, got shape={smoothed.shape}")
+
+    for lbl in g.sorted_labels[:n_components]:
+        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
+            edge_src=g.edge_src,
+            edge_dst=g.edge_dst,
+            edge_distances=g.edge_distances,
+            labels=g.labels,
+            label=lbl,
+            unique_nodes=g.unique_nodes,
+        )
+        if _nodes.size < 2 or _edge_src.size == 0:
+            results.append((int(lbl), float("nan")))
+            continue
+
+        comp_signal = smoothed[_nodes]
+        finite_mask = np.isfinite(comp_signal)
+        if np.sum(finite_mask) < 2:
+            results.append((int(lbl), float("nan")))
+            continue
+
+        edge_mask = finite_mask[_edge_src] & finite_mask[_edge_dst]
+        if not np.any(edge_mask):
+            results.append((int(lbl), float("nan")))
+            continue
+
+        try:
+            fwhm = estimate_fwhm(
+                edge_src=_edge_src[edge_mask],
+                edge_dst=_edge_dst[edge_mask],
+                edge_distances=_edge_distances[edge_mask],
+                signal_data=comp_signal,
+            )
+        except Exception:
+            fwhm = float("nan")
+        results.append((int(lbl), float(fwhm)))
+
+    return results
 
 
 def _gm_std_summary(values: np.ndarray, gm_nodes: np.ndarray, labels: np.ndarray, unique_nodes: np.ndarray) -> tuple[float, dict[int, float]]:
-    """Return (weighted mean std across GM components, per-component std)."""
+    """Return (weighted mean std across GM components, per-component std).
 
-    gm_set = set(gm_nodes.tolist())
-    gm_label_ids = []
-    for lbl in np.unique(labels):
-        nodes = unique_nodes[labels == lbl]
-        if nodes.size == 0:
-            continue
-        # if any node in this component is GM, treat as GM component
-        if any(int(n) in gm_set for n in nodes[: min(nodes.size, 1000)]):
-            # cheap check; refined below
-            pass
+    - values: full-length (raveled) signal vector indexed by voxel linear index.
+    - gm_nodes: linear indices of voxels considered GM (on the same raveled grid).
+    - labels: array of component labels corresponding to unique_nodes (same length as unique_nodes).
+    - unique_nodes: array of linear voxel indices for each node in the graph (same ordering as labels).
+    """
+    # identify components that contain any GM nodes
+    if unique_nodes is None or unique_nodes.size == 0:
+        return float("nan"), {}
 
-    # Identify GM components precisely
     gm_node_mask = np.isin(unique_nodes, gm_nodes)
     gm_component_labels = np.unique(labels[gm_node_mask]) if np.any(gm_node_mask) else np.array([], dtype=int)
 
@@ -283,6 +336,8 @@ def _gm_std_summary(values: np.ndarray, gm_nodes: np.ndarray, labels: np.ndarray
 
     for lbl in gm_component_labels:
         nodes = unique_nodes[labels == lbl]
+        if nodes.size == 0:
+            continue
         v = values[nodes]
         v = v[np.isfinite(v)]
         if v.size == 0:
@@ -329,16 +384,24 @@ def run_experiment(
     parent = _build_parent_mapping_1mm_to_3mm(g1, g3)
     pr_src, pr_dst, pr_dist = prune_1mm_edges_using_3mm_connectivity(g1, g3, parent)
 
+    if pr_src.size == 0:
+        labels_p = np.array([], dtype=int)
+        sorted_labels_p = np.array([], dtype=int)
+        unique_nodes_p = np.array([], dtype=int)
+    else:
+        labels_p, sorted_labels_p, unique_nodes_p = identify_connected_components(pr_src, pr_dst)
+
     # Build a "pruned" graph object with same nodes/mask/affine as 1mm
     g1p = GraphData(
         voxel_size_mm=g1.voxel_size_mm,
         affine=g1.affine,
         mask_3d=g1.mask_3d,
-        unique_nodes=g1.unique_nodes,
+        unique_nodes=unique_nodes_p,
         edge_src=pr_src,
         edge_dst=pr_dst,
         edge_distances=pr_dist,
-        labels=identify_connected_components(g1.unique_nodes, pr_src, pr_dst)[0].astype(int),
+        labels=labels_p,
+        sorted_labels=sorted_labels_p,
     )
 
     # Noise lives on the 1mm grid
@@ -353,10 +416,14 @@ def run_experiment(
     sm1 = _smooth_noise_on_graph(g1, tau1, noise)
     sm1p = _smooth_noise_on_graph(g1p, tau1p, noise)
 
+    fwhm_top_1 = _estimate_fwhm_for_top_components(g1, sm1, n_components=5)
+    fwhm_top_1p = _estimate_fwhm_for_top_components(g1, sm1p, n_components=5)
+
     gm_nodes = _gm_nodes_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
 
     gm_std_1, gm_std_per_1 = _gm_std_summary(sm1, gm_nodes, g1.labels, g1.unique_nodes)
-    gm_std_1p, gm_std_per_1p = _gm_std_summary(sm1p, gm_nodes, g1p.labels, g1p.unique_nodes)
+    # Use g1 component definition for the pruned-smoothed signal as well (compare on same components)
+    gm_std_1p, gm_std_per_1p = _gm_std_summary(sm1p, gm_nodes, g1.labels, g1.unique_nodes)
 
     # Write one-row CSV + optional per-component breakdown columns
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
@@ -374,6 +441,11 @@ def run_experiment(
         "gm_weighted_std_1mm_pruned",
         "gm_std_ratio_pruned_over_baseline",
     ]
+    for i in range(1, 6):
+        fieldnames.append(f"fwhm_top{i}_label_1mm")
+        fieldnames.append(f"fwhm_top{i}_value_1mm")
+        fieldnames.append(f"fwhm_top{i}_label_1mm_pruned")
+        fieldnames.append(f"fwhm_top{i}_value_1mm_pruned")
     for lbl in all_labels:
         fieldnames.append(f"gm_std_comp_{lbl}_1mm")
         fieldnames.append(f"gm_std_comp_{lbl}_1mm_pruned")
@@ -390,6 +462,15 @@ def run_experiment(
         "gm_weighted_std_1mm_pruned": float(gm_std_1p),
         "gm_std_ratio_pruned_over_baseline": float(gm_std_1p / gm_std_1) if np.isfinite(gm_std_1) and gm_std_1 != 0 else float("nan"),
     }
+    for i in range(1, 6):
+        lbl1 = fwhm_top_1[i - 1][0] if len(fwhm_top_1) >= i else ""
+        val1 = fwhm_top_1[i - 1][1] if len(fwhm_top_1) >= i else float("nan")
+        lbl1p = fwhm_top_1p[i - 1][0] if len(fwhm_top_1p) >= i else ""
+        val1p = fwhm_top_1p[i - 1][1] if len(fwhm_top_1p) >= i else float("nan")
+        row[f"fwhm_top{i}_label_1mm"] = lbl1
+        row[f"fwhm_top{i}_value_1mm"] = float(val1) if val1 != "" else float("nan")
+        row[f"fwhm_top{i}_label_1mm_pruned"] = lbl1p
+        row[f"fwhm_top{i}_value_1mm_pruned"] = float(val1p) if val1p != "" else float("nan")
     for lbl in all_labels:
         row[f"gm_std_comp_{lbl}_1mm"] = float(gm_std_per_1.get(lbl, float("nan")))
         row[f"gm_std_comp_{lbl}_1mm_pruned"] = float(gm_std_per_1p.get(lbl, float("nan")))
