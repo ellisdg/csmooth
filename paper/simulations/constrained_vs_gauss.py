@@ -172,7 +172,7 @@ def _compute_method_metrics(
     gt_mask: np.ndarray,
     domain_mask: np.ndarray,
     pred_values: np.ndarray,
-    pred_threshold_quantile: float,
+    pred_threshold_quantile: float | None,
 ) -> dict:
     pred_vec = pred_values.ravel()
     domain_idx = np.flatnonzero(domain_mask.ravel())
@@ -192,6 +192,14 @@ def _compute_method_metrics(
             "pred_thr": float("nan"),
             "pred_mask": np.zeros_like(pred_vec, dtype=bool),
         }
+
+    # If pred_threshold_quantile is None, caller should have set it to an effective numeric
+    # value (1 - prevalence). Here, defend in case it is still None by computing from gt
+    # prevalence within the domain.
+    if pred_threshold_quantile is None:
+        # compute prevalence from gt_mask within domain and set quantile = 1 - prevalence
+        prevalence = float(np.mean(gt_mask[domain_idx].astype(float))) if domain_idx.size else 0.0
+        pred_threshold_quantile = float(1.0 - prevalence)
 
     pred_mask, pred_thr = _compute_pred_mask(pred_values, domain_mask, pred_threshold_quantile)
 
@@ -252,7 +260,8 @@ def run_constrained_vs_gauss_experiment_single_region(
     unique_nodes: np.ndarray,
     optimal_taus_by_fwhm: dict[float, list[float]] | None = None,
     random_seed: int | None = None,
-    pred_threshold_quantile: float = 0.75,
+    pred_threshold_quantile: float | None = None,
+    overwrite_volumes: bool = False,
     save_images: bool = True,
     plot_outputs: bool = False,
 ) -> tuple[list[dict], dict[float, list[float]]]:
@@ -280,14 +289,36 @@ def run_constrained_vs_gauss_experiment_single_region(
     raw_tmap_3d = (gt_field + noise).astype(float)
     raw_tmap_3d[~domain_mask] = 0.0
 
-    raw_tmap_img = nib.Nifti1Image(raw_tmap_3d, brain_mask_image.affine)
-    if save_images:
-        nib.save(raw_tmap_img, os.path.join(output_dir, "raw_tmap.nii.gz"))
+    raw_path = os.path.join(output_dir, "raw_tmap.nii.gz")
+    # If raw volume exists and overwrite is False, load it; otherwise use generated and save if requested
+    if os.path.exists(raw_path) and not overwrite_volumes:
+        tmp_img = nib.load(raw_path)
+        tmp_arr = np.asarray(tmp_img.get_fdata())
+        if tmp_arr.shape == gt_field.shape:
+            raw_tmap_img = tmp_img
+            raw_tmap_3d = np.asarray(raw_tmap_img.get_fdata(), dtype=float)
+        else:
+            print(f"Existing raw volume {raw_path} has shape {tmp_arr.shape} != expected {gt_field.shape}; recomputing.")
+            raw_tmap_img = nib.Nifti1Image(raw_tmap_3d, brain_mask_image.affine)
+            if save_images:
+                nib.save(raw_tmap_img, raw_path)
+    else:
+        raw_tmap_img = nib.Nifti1Image(raw_tmap_3d, brain_mask_image.affine)
+        if save_images:
+            nib.save(raw_tmap_img, raw_path)
 
     gt_mask = gt_mask_3d.ravel()
     wm_mask_flat = wm_mask.ravel()
     gm_mask_flat = gm_mask.ravel()
     other_mask_flat = other_mask.ravel()
+
+    # If pred_threshold_quantile is None, compute an effective numeric quantile equal to
+    # 1 - prevalence (prevalence computed from GT within the domain). This becomes the
+    # default behaviour requested by the user.
+    domain_idx_global = np.flatnonzero(domain_mask.ravel())
+    if pred_threshold_quantile is None:
+        prevalence = float(np.mean(gt_mask[domain_idx_global].astype(float))) if domain_idx_global.size else 0.0
+        pred_threshold_quantile = float(1.0 - prevalence)
 
     rows: list[dict] = []
     plot_dir = os.path.join(output_dir, "plots")
@@ -325,31 +356,70 @@ def run_constrained_vs_gauss_experiment_single_region(
             main_labels = [int(lbl) for lbl in sorted_labels[:5]]
             taus = optimal_taus_by_fwhm[fwhm]
 
-        constrained = apply_constrained_smoothing(
-            signal_data=raw_tmap_3d.copy(),
-            edge_src=edge_src,
-            edge_dst=edge_dst,
-            edge_distances=edge_distances,
-            labels=labels,
-            sorted_labels=sorted_labels,
-            unique_nodes=unique_nodes,
-            main_labels=main_labels,
-            taus=taus,
-            low_memory=False,
-        ).reshape(raw_tmap_3d.shape)
-
-        constrained_img = nib.Nifti1Image(constrained, brain_mask_image.affine)
         constrained_path = os.path.join(fwhm_dir, "constrained_tmap.nii.gz")
-        if save_images:
-            nib.save(constrained_img, constrained_path)
-
-        gaussian_img = smooth_img(raw_tmap_img, fwhm=fwhm)
-        gaussian = np.asarray(gaussian_img.get_fdata(), dtype=float)
-        gaussian[~domain_mask] = 0.0
-        gaussian_img = nib.Nifti1Image(gaussian, brain_mask_image.affine)
         gaussian_path = os.path.join(fwhm_dir, "gaussian_tmap.nii.gz")
-        if save_images:
-            nib.save(gaussian_img, gaussian_path)
+
+        # Constrained: load if exists and not overwriting, else compute and save (if enabled)
+        if os.path.exists(constrained_path) and not overwrite_volumes:
+            tmp_img = nib.load(constrained_path)
+            tmp_arr = np.asarray(tmp_img.get_fdata())
+            if tmp_arr.shape == raw_tmap_3d.shape:
+                constrained = np.asarray(tmp_img.get_fdata(), dtype=float)
+            else:
+                print(f"Existing constrained volume {constrained_path} has shape {tmp_arr.shape} != expected {raw_tmap_3d.shape}; recomputing.")
+                constrained = apply_constrained_smoothing(
+                    signal_data=raw_tmap_3d.copy(),
+                    edge_src=edge_src,
+                    edge_dst=edge_dst,
+                    edge_distances=edge_distances,
+                    labels=labels,
+                    sorted_labels=sorted_labels,
+                    unique_nodes=unique_nodes,
+                    main_labels=main_labels,
+                    taus=taus,
+                    low_memory=False,
+                ).reshape(raw_tmap_3d.shape)
+                if save_images:
+                    constrained_img = nib.Nifti1Image(constrained, brain_mask_image.affine)
+                    nib.save(constrained_img, constrained_path)
+        else:
+            constrained = apply_constrained_smoothing(
+                signal_data=raw_tmap_3d.copy(),
+                edge_src=edge_src,
+                edge_dst=edge_dst,
+                edge_distances=edge_distances,
+                labels=labels,
+                sorted_labels=sorted_labels,
+                unique_nodes=unique_nodes,
+                main_labels=main_labels,
+                taus=taus,
+                low_memory=False,
+            ).reshape(raw_tmap_3d.shape)
+            if save_images:
+                constrained_img = nib.Nifti1Image(constrained, brain_mask_image.affine)
+                nib.save(constrained_img, constrained_path)
+
+        # Gaussian: load if exists and not overwriting, else compute and save (if enabled)
+        if os.path.exists(gaussian_path) and not overwrite_volumes:
+            tmp_img = nib.load(gaussian_path)
+            tmp_arr = np.asarray(tmp_img.get_fdata())
+            if tmp_arr.shape == raw_tmap_3d.shape:
+                gaussian = np.asarray(tmp_img.get_fdata(), dtype=float)
+            else:
+                print(f"Existing gaussian volume {gaussian_path} has shape {tmp_arr.shape} != expected {raw_tmap_3d.shape}; recomputing.")
+                gaussian_img = smooth_img(raw_tmap_img, fwhm=fwhm)
+                gaussian = np.asarray(gaussian_img.get_fdata(), dtype=float)
+                gaussian[~domain_mask] = 0.0
+                if save_images:
+                    gaussian_img = nib.Nifti1Image(gaussian, brain_mask_image.affine)
+                    nib.save(gaussian_img, gaussian_path)
+        else:
+            gaussian_img = smooth_img(raw_tmap_img, fwhm=fwhm)
+            gaussian = np.asarray(gaussian_img.get_fdata(), dtype=float)
+            gaussian[~domain_mask] = 0.0
+            if save_images:
+                gaussian_img = nib.Nifti1Image(gaussian, brain_mask_image.affine)
+                nib.save(gaussian_img, gaussian_path)
 
         raw_metrics = _compute_method_metrics(gt_mask, domain_mask, raw_tmap_3d, pred_threshold_quantile)
         constrained_metrics = _compute_method_metrics(gt_mask, domain_mask, constrained, pred_threshold_quantile)
@@ -371,7 +441,7 @@ def run_constrained_vs_gauss_experiment_single_region(
             "fwhm_mm": float(fwhm),
             "amplitude": float(amplitude),
             "noise_std": float(noise_std),
-            "pred_threshold_quantile": float(pred_threshold_quantile),
+            "pred_threshold_quantile": float(pred_threshold_quantile) if pred_threshold_quantile is not None else float("nan"),
             "raw_pred_threshold": float(raw_metrics["pred_thr"]),
             "constrained_pred_threshold": float(constrained_metrics["pred_thr"]),
             "gaussian_pred_threshold": float(gaussian_metrics["pred_thr"]),
@@ -526,7 +596,8 @@ def run_constrained_vs_gauss_experiment(
     output_dir: str,
     label_region: int | None = None,
     random_seed: int | None = None,
-    pred_threshold_quantile: float = 0.75,
+    pred_threshold_quantile: float | None = None,
+    overwrite_volumes: bool = False,
     save_images: bool = True,
     plot_outputs: bool = False,
 ) -> list[dict]:
@@ -593,6 +664,7 @@ def run_constrained_vs_gauss_experiment(
             optimal_taus_by_fwhm=optimal_taus_by_fwhm,
             random_seed=seed,
             pred_threshold_quantile=pred_threshold_quantile,
+            overwrite_volumes=overwrite_volumes,
             save_images=save_images,
             plot_outputs=plot_outputs,
         )
@@ -625,8 +697,8 @@ def parse_args():
     parser.add_argument(
         "--threshold-quantile",
         type=float,
-        default=0.75,
-        help="Quantile over brain-mask voxels for defining active voxels",
+        default=None,
+        help="Quantile over brain-mask voxels for defining active voxels. If omitted, the code will use 1 - prevalence (prevalence computed from the GT within the brain mask)",
     )
     parser.add_argument(
         "--output-dir",
@@ -637,6 +709,11 @@ def parse_args():
     parser.add_argument("--save-plots", action="store_true", help="Whether to save comparison plots")
     parser.add_argument("--no-save-volumes", action="store_true",
                         help="Whether to skip saving NIfTI outputs and plots")
+    parser.add_argument(
+        "--overwrite-volumes",
+        action="store_true",
+        help="If set, recompute and overwrite any existing output volumes (raw/constrained/gaussian). Otherwise existing volumes are loaded.",
+    )
     return parser.parse_args()
 
 
@@ -670,7 +747,8 @@ def main():
         output_dir=output_dir,
         label_region=args.label_region,
         random_seed=args.random_seed,
-        pred_threshold_quantile=float(args.threshold_quantile),
+        pred_threshold_quantile=args.threshold_quantile,
+        overwrite_volumes=bool(args.overwrite_volumes),
         save_images=not args.no_save_volumes,
         plot_outputs=bool(args.save_plots) and not args.no_save_volumes,
     )
