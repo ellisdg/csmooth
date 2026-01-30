@@ -42,7 +42,8 @@ import nibabel as nib
 
 from csmooth.graph import create_graph
 from csmooth.components import identify_connected_components
-from csmooth.smooth import select_nodes, find_optimal_tau, smooth_component
+from csmooth.smooth import select_nodes, find_optimal_tau
+from csmooth.heat import heat_kernel_smoothing
 from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 from csmooth.fwhm import estimate_fwhm
 
@@ -242,7 +243,6 @@ def _smooth_noise_on_graph(g: GraphData, tau_by_label: dict[int, float], noise: 
         raise ValueError(f"Expected 1D noise vector, got shape={noise.shape}")
 
     sm = noise.copy()
-    sm2d = sm[:, None]
 
     # smooth each component separately (as in the main script)
     for lbl in np.unique(g.labels):
@@ -254,18 +254,35 @@ def _smooth_noise_on_graph(g: GraphData, tau_by_label: dict[int, float], noise: 
         if not np.isfinite(tau):
             continue
 
-        smooth_component(
+        # select and renumber edges/nodes for this component (local indexing)
+        _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
             edge_src=g.edge_src,
             edge_dst=g.edge_dst,
             edge_distances=g.edge_distances,
-            signal_data=sm2d,
             labels=g.labels,
             label=lbl_int,
             unique_nodes=g.unique_nodes,
+        )
+
+        if _nodes.size == 0:
+            continue
+
+        # extract local 1D signal for the nodes in this component
+        local_signal = sm[_nodes]
+
+        # apply heat kernel smoothing which expects a 1D signal for single-timepoint
+        smoothed_local = heat_kernel_smoothing(
+            edge_src=_edge_src,
+            edge_dst=_edge_dst,
+            edge_distances=_edge_distances,
+            signal_data=local_signal,
             tau=tau,
         )
 
-    return sm2d[:, 0]
+        # smoothed_local should be same shape as local_signal; write back into global vector
+        sm[_nodes] = smoothed_local
+
+    return sm
 
 
 def _estimate_fwhm_for_top_components(
