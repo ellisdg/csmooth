@@ -120,8 +120,8 @@ def _build_parent_mapping_1mm_to_3mm(g1: GraphData, g3: GraphData) -> np.ndarray
     parent = np.full(max1 + 1, -1, dtype=int)
 
     # voxel centers for both grids
-    xyz1 = _voxel_centers_mm(tuple(g1.mask_3d.shape), g1.affine)
-    xyz3 = _voxel_centers_mm(tuple(g3.mask_3d.shape), g3.affine)
+    xyz1 = _voxel_centers_mm(tuple(int(x) for x in g1.mask_3d.shape), g1.affine)
+    xyz3 = _voxel_centers_mm(tuple(int(x) for x in g3.mask_3d.shape), g3.affine)
 
     # Only consider nodes that exist in the graphs (mask voxels)
     nodes1 = g1.unique_nodes.astype(int)
@@ -179,10 +179,10 @@ def prune_1mm_edges_using_3mm_connectivity(g1: GraphData, g3: GraphData, parent:
     if np.any(cand):
         a = np.minimum(psrc[cand], pdst[cand])
         b = np.maximum(psrc[cand], pdst[cand])
-        # vectorized membership check by converting to structured array and using np.isin
-        pairs = np.core.records.fromarrays([a, b], names="a,b", formats="i4,i4")
-        parent_pairs = np.array(list(parent_adj), dtype=[("a", "i4"), ("b", "i4")])
-        keep_adj = np.isin(pairs, parent_pairs)
+        # membership check against the parent adjacency set (iterative but clear)
+        keep_adj = np.zeros(a.shape, dtype=bool)
+        for i_idx, (ai, bi) in enumerate(zip(a.tolist(), b.tolist())):
+            keep_adj[i_idx] = (int(ai), int(bi)) in parent_adj
         keep[cand] = keep_adj
 
     pr_src = src[keep]
@@ -408,6 +408,7 @@ def run_experiment(
     t1w_file: str,
     brain_mask_file: str,
     gm_prob_file: str,
+    wm_prob_file: str,
     pial_l_file: str,
     pial_r_file: str,
     white_l_file: str,
@@ -416,12 +417,15 @@ def run_experiment(
     noise_std: float,
     random_seed: int | None,
     output_csv: str,
-    gm_threshold: float = 0.2,
+    gm_threshold: float = 0.5,
+    wm_threshold: float = 0.5,
+    tau_fixed: float = 13.0,
 ):
     rng = np.random.default_rng(None if random_seed is None else int(random_seed))
 
     brain_mask_img = nib.load(brain_mask_file)
     gm_prob_img = nib.load(gm_prob_file)
+    wm_prob_img = nib.load(wm_prob_file)
 
     surfaces = (pial_l_file, pial_r_file, white_l_file, white_r_file)
 
@@ -457,15 +461,20 @@ def run_experiment(
     noise[~g1.mask_3d.ravel()] = np.nan
 
     # Compute tau (separately) for baseline and pruned graphs
-    tau1 = _estimate_tau_for_fwhm(g1, fwhm_mm=float(fwhm_mm))
-    tau1p = _estimate_tau_for_fwhm(g1p, fwhm_mm=float(fwhm_mm))
+    tau1_est = _estimate_tau_for_fwhm(g1, fwhm_mm=float(fwhm_mm))
+    tau1p_est = _estimate_tau_for_fwhm(g1p, fwhm_mm=float(fwhm_mm))
 
-    gm_component_labels, gm_nodes = _gm_components_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
+    # Fixed tau maps reuse the same value for all components
+    tau1_fixed = {int(lbl): float(tau_fixed) for lbl in np.unique(g1.labels)}
+    tau1p_fixed = {int(lbl): float(tau_fixed) for lbl in np.unique(g1p.labels)}
+
+    gm_component_labels, _ = _gm_components_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
+    wm_component_labels, _ = _gm_components_from_probseg(g1, wm_prob_img, gm_threshold=float(wm_threshold))
 
     baseline, gm_std_1, fwhm_top_1 = _scenario_result(
         graph_name="original",
         g_smooth=g1,
-        tau_by_label=tau1,
+        tau_by_label=tau1_est,
         gm_component_labels=gm_component_labels,
         eval_labels=g1.labels,
         eval_unique_nodes=g1.unique_nodes,
@@ -474,7 +483,7 @@ def run_experiment(
     pruned, gm_std_1p, fwhm_top_1p = _scenario_result(
         graph_name="pruned",
         g_smooth=g1p,
-        tau_by_label=tau1p,
+        tau_by_label=tau1p_est,
         gm_component_labels=gm_component_labels,
         eval_labels=g1.labels,
         eval_unique_nodes=g1.unique_nodes,
@@ -483,7 +492,27 @@ def run_experiment(
     mixed, gm_std_mixed, fwhm_top_mixed = _scenario_result(
         graph_name="pruned_original_tau",
         g_smooth=g1p,
-        tau_by_label=tau1,
+        tau_by_label=tau1_est,
+        gm_component_labels=gm_component_labels,
+        eval_labels=g1.labels,
+        eval_unique_nodes=g1.unique_nodes,
+        noise=noise,
+    )
+
+    # Fixed-tau smoothing on graphs (baseline/pruned) using supplied tau_fixed
+    baseline_fixed, gm_std_1_fixed, fwhm_top_1_fixed = _scenario_result(
+        graph_name="original",
+        g_smooth=g1,
+        tau_by_label=tau1_fixed,
+        gm_component_labels=gm_component_labels,
+        eval_labels=g1.labels,
+        eval_unique_nodes=g1.unique_nodes,
+        noise=noise,
+    )
+    pruned_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed = _scenario_result(
+        graph_name="pruned",
+        g_smooth=g1p,
+        tau_by_label=tau1p_fixed,
         gm_component_labels=gm_component_labels,
         eval_labels=g1.labels,
         eval_unique_nodes=g1.unique_nodes,
@@ -493,20 +522,24 @@ def run_experiment(
     # Assemble CSV with one row per scenario
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
 
-    tau_labels_all = sorted(set(tau1.keys()) | set(tau1p.keys()))
-
     fieldnames = [
+        "experiment",
         "graph",
         "fwhm_mm",
+        "tau_fixed",
         "noise_std",
         "random_seed",
         "gm_threshold",
+        "wm_threshold",
         "graph_voxel_size_mm",
         "graph_n_nodes",
         "graph_n_edges",
         "n_edges_1mm",
         "n_edges_1mm_pruned",
         "gm_weighted_std",
+        "gm_weighted_fwhm",
+        "wm_weighted_std",
+        "wm_weighted_fwhm",
         "gm_std_ratio_to_original",
         "tau_mean",
         "tau_std",
@@ -514,27 +547,78 @@ def run_experiment(
     for i in range(1, 6):
         fieldnames.append(f"fwhm_top{i}_label")
         fieldnames.append(f"fwhm_top{i}_value")
-    for lbl in tau_labels_all:
-        fieldnames.append(f"tau_label_{lbl}")
 
     rows = []
-    for scenario, gm_std_val, fwhm_top, tau_map in [
-        (baseline, gm_std_1, fwhm_top_1, tau1),
-        (pruned, gm_std_1p, fwhm_top_1p, tau1p),
-        (mixed, gm_std_mixed, fwhm_top_mixed, tau1),
-    ]:
+    def _component_weighted_fwhm(g: GraphData, smoothed: np.ndarray, component_labels: np.ndarray) -> float:
+        if component_labels.size == 0:
+            return float("nan")
+        fwhms = []
+        weights = []
+        for lbl in component_labels:
+            _edge_src, _edge_dst, _edge_distances, _nodes = select_nodes(
+                edge_src=g.edge_src,
+                edge_dst=g.edge_dst,
+                edge_distances=g.edge_distances,
+                labels=g.labels,
+                label=int(lbl),
+                unique_nodes=g.unique_nodes,
+            )
+            if _nodes.size < 2 or _edge_src.size == 0:
+                continue
+            comp_signal = smoothed[_nodes]
+            finite_mask = np.isfinite(comp_signal)
+            edge_mask = finite_mask[_edge_src] & finite_mask[_edge_dst]
+            if not np.any(edge_mask):
+                continue
+            try:
+                fwhm_val = estimate_fwhm(
+                    edge_src=_edge_src[edge_mask],
+                    edge_dst=_edge_dst[edge_mask],
+                    edge_distances=_edge_distances[edge_mask],
+                    signal_data=comp_signal,
+                )
+            except Exception:
+                continue
+            fwhms.append(float(fwhm_val))
+            weights.append(int(_nodes.size))
+        if weights:
+            w = np.asarray(weights, dtype=float)
+            f = np.asarray(fwhms, dtype=float)
+            return float(np.sum(w * f) / np.sum(w))
+        return float("nan")
+
+    scenarios = [
+        ("estimated_fwhm", baseline, tau1_est, gm_std_1, fwhm_top_1, g1, noise),
+        ("estimated_fwhm", pruned, tau1p_est, gm_std_1p, fwhm_top_1p, g1p, noise),
+        ("estimated_fwhm", mixed, tau1_est, gm_std_mixed, fwhm_top_mixed, g1p, noise),
+        ("fixed_tau", baseline_fixed, tau1_fixed, gm_std_1_fixed, fwhm_top_1_fixed, g1, noise),
+        ("fixed_tau", pruned_fixed, tau1p_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed, g1p, noise),
+    ]
+
+    for experiment, scenario, tau_map, gm_std_val, fwhm_top, graph_obj, smoothed_noise in scenarios:
+        # derive GM/WM weighted FWHM and WM weighted std
+        smoothed_signal = _smooth_noise_on_graph(graph_obj, tau_map, smoothed_noise)
+        gm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, gm_component_labels)
+        wm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, wm_component_labels)
+        wm_std_weighted = _gm_std_summary(smoothed_signal, wm_component_labels, graph_obj.labels, graph_obj.unique_nodes)
         row = {
+            "experiment": experiment,
             "graph": scenario["graph"],
             "fwhm_mm": float(fwhm_mm),
+            "tau_fixed": float(tau_fixed),
             "noise_std": float(noise_std),
             "random_seed": ("" if random_seed is None else int(random_seed)),
             "gm_threshold": float(gm_threshold),
+            "wm_threshold": float(wm_threshold),
             "graph_voxel_size_mm": scenario["graph_voxel_size_mm"],
             "graph_n_nodes": scenario["graph_n_nodes"],
             "graph_n_edges": scenario["graph_n_edges"],
             "n_edges_1mm": int(g1.edge_src.size),
             "n_edges_1mm_pruned": int(pr_src.size),
             "gm_weighted_std": gm_std_val,
+            "gm_weighted_fwhm": gm_fwhm_weighted,
+            "wm_weighted_std": wm_std_weighted,
+            "wm_weighted_fwhm": wm_fwhm_weighted,
             "gm_std_ratio_to_original": float(
                 gm_std_val / gm_std_1
             ) if np.isfinite(gm_std_1) and gm_std_1 != 0 else float("nan"),
@@ -546,8 +630,6 @@ def run_experiment(
             val = fwhm_top[i - 1][1] if len(fwhm_top) >= i else float("nan")
             row[f"fwhm_top{i}_label"] = lbl
             row[f"fwhm_top{i}_value"] = float(val) if val != "" else float("nan")
-        for lbl in tau_labels_all:
-            row[f"tau_label_{lbl}"] = float(tau_map.get(lbl, float("nan")))
         rows.append(row)
 
     with open(output_csv, "w", newline="") as f:
@@ -566,8 +648,10 @@ def main():
     parser = argparse.ArgumentParser(description="Graph connection voxel-size ablation (1mm nodes, 3mm connectivity pruning)")
     parser.add_argument("--fwhm", type=float, default=6.0)
     parser.add_argument("--noise-std", type=float, default=2.0)
-    parser.add_argument("--gm-threshold", type=float, default=0.2)
+    parser.add_argument("--gm-threshold", type=float, default=0.5)
+    parser.add_argument("--wm-threshold", type=float, default=0.5)
     parser.add_argument("--random-seed", type=int, default=0)
+    parser.add_argument("--tau-fixed", type=float, default=13.0)
     parser.add_argument("--output-csv", type=str, default=os.path.join(file_dir, "graph_connection_voxelsize_effect.csv"))
 
     args = parser.parse_args()
@@ -575,6 +659,7 @@ def main():
     t1w_file = os.path.join(data_dir, "sub-MSC06_desc-preproc_T1w.nii.gz")
     brain_mask_file = os.path.join(data_dir, "sub-MSC06_desc-brain_mask.nii.gz")
     gm_prob_file = os.path.join(data_dir, "sub-MSC06_label-GM_probseg.nii.gz")
+    wm_prob_file = os.path.join(data_dir, "sub-MSC06_label-WM_probseg.nii.gz")
     pial_l_file = os.path.join(data_dir, "sub-MSC06_hemi-L_pial.surf.gii")
     pial_r_file = os.path.join(data_dir, "sub-MSC06_hemi-R_pial.surf.gii")
     white_l_file = os.path.join(data_dir, "sub-MSC06_hemi-L_white.surf.gii")
@@ -584,6 +669,7 @@ def main():
         t1w_file=t1w_file,
         brain_mask_file=brain_mask_file,
         gm_prob_file=gm_prob_file,
+        wm_prob_file=wm_prob_file,
         pial_l_file=pial_l_file,
         pial_r_file=pial_r_file,
         white_l_file=white_l_file,
@@ -593,6 +679,8 @@ def main():
         random_seed=None if args.random_seed is None else int(args.random_seed),
         output_csv=str(args.output_csv),
         gm_threshold=float(args.gm_threshold),
+        wm_threshold=float(args.wm_threshold),
+        tau_fixed=float(args.tau_fixed),
     )
 
 
