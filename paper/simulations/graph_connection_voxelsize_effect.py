@@ -192,16 +192,34 @@ def prune_1mm_edges_using_3mm_connectivity(g1: GraphData, g3: GraphData, parent:
     return pr_src, pr_dst, pr_dist
 
 
-def _gm_nodes_from_probseg(g: GraphData, gm_prob_img: nib.Nifti1Image, gm_threshold: float = 0.2) -> np.ndarray:
-    # resample gm_prob to the graph grid
+def _gm_components_from_probseg(
+    g: GraphData,
+    gm_prob_img: nib.Nifti1Image,
+    gm_threshold: float = 0.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (gm_component_labels, gm_nodes) using component-average GM probability."""
     from nilearn.image import resample_img
 
     gm_res = resample_img(gm_prob_img, target_affine=g.affine, target_shape=g.mask_3d.shape, interpolation="continuous")
-    gm_prob = np.asarray(gm_res.get_fdata(), dtype=float)
+    gm_prob = np.asarray(gm_res.get_fdata(), dtype=float).ravel()
 
-    gm_mask = (gm_prob >= float(gm_threshold)) & g.mask_3d
-    gm_nodes = np.flatnonzero(gm_mask.ravel())
-    return np.asarray(gm_nodes).astype(int)
+    gm_component_labels = []
+    gm_nodes = []
+    for lbl in np.unique(g.labels):
+        nodes = g.unique_nodes[g.labels == lbl]
+        if nodes.size == 0:
+            continue
+        comp_probs = gm_prob[nodes]
+        if np.mean(comp_probs[np.isfinite(comp_probs)]) > float(gm_threshold):
+            gm_component_labels.append(int(lbl))
+            gm_nodes.append(nodes)
+
+    if gm_nodes:
+        gm_nodes_arr = np.concatenate(gm_nodes)
+    else:
+        gm_nodes_arr = np.array([], dtype=int)
+
+    return np.asarray(gm_component_labels, dtype=int), gm_nodes_arr
 
 
 def _estimate_tau_for_fwhm(g: GraphData, fwhm_mm: float, n_components: int = 5) -> dict[int, float]:
@@ -332,22 +350,11 @@ def _estimate_fwhm_for_top_components(
     return results
 
 
-def _gm_std_summary(values: np.ndarray, gm_nodes: np.ndarray, labels: np.ndarray, unique_nodes: np.ndarray) -> tuple[float, dict[int, float]]:
-    """Return (weighted mean std across GM components, per-component std).
-
-    - values: full-length (raveled) signal vector indexed by voxel linear index.
-    - gm_nodes: linear indices of voxels considered GM (on the same raveled grid).
-    - labels: array of component labels corresponding to unique_nodes (same length as unique_nodes).
-    - unique_nodes: array of linear voxel indices for each node in the graph (same ordering as labels).
-    """
-    # identify components that contain any GM nodes
+def _gm_std_summary(values: np.ndarray, gm_component_labels: np.ndarray, labels: np.ndarray, unique_nodes: np.ndarray) -> float:
+    """Return weighted mean std across GM components (weights = component size)."""
     if unique_nodes is None or unique_nodes.size == 0:
-        return float("nan"), {}
+        return float("nan")
 
-    gm_node_mask = np.isin(unique_nodes, gm_nodes)
-    gm_component_labels = np.unique(labels[gm_node_mask]) if np.any(gm_node_mask) else np.array([], dtype=int)
-
-    per: dict[int, float] = {}
     weights = []
     stds = []
 
@@ -359,19 +366,42 @@ def _gm_std_summary(values: np.ndarray, gm_nodes: np.ndarray, labels: np.ndarray
         v = v[np.isfinite(v)]
         if v.size == 0:
             continue
-        s = float(np.std(v))
-        per[int(lbl)] = s
         weights.append(int(nodes.size))
-        stds.append(s)
+        stds.append(float(np.std(v)))
 
     if weights:
         w = np.asarray(weights, dtype=float)
         sarr = np.asarray(stds, dtype=float)
-        weighted = float(np.sum(w * sarr) / np.sum(w))
-    else:
-        weighted = float("nan")
+        return float(np.sum(w * sarr) / np.sum(w))
 
-    return weighted, per
+    return float("nan")
+
+
+def _scenario_result(
+    graph_name: str,
+    g_smooth: GraphData,
+    tau_by_label: dict[int, float],
+    gm_component_labels: np.ndarray,
+    eval_labels: np.ndarray,
+    eval_unique_nodes: np.ndarray,
+    noise: np.ndarray,
+    n_fwhm_components: int = 5,
+) -> tuple[dict, float, list[tuple[int, float]]]:
+    """Smooth noise on a graph and return scenario-level metrics."""
+    smoothed = _smooth_noise_on_graph(g_smooth, tau_by_label, noise)
+    gm_weighted_std = _gm_std_summary(smoothed, gm_component_labels, eval_labels, eval_unique_nodes)
+    fwhm_top = _estimate_fwhm_for_top_components(g_smooth, smoothed, n_components=n_fwhm_components)
+    tau_vals = np.asarray([v for v in tau_by_label.values() if np.isfinite(v)], dtype=float)
+    scenario = {
+        "graph": graph_name,
+        "graph_voxel_size_mm": float(g_smooth.voxel_size_mm),
+        "graph_n_nodes": int(g_smooth.unique_nodes.size),
+        "graph_n_edges": int(g_smooth.edge_src.size),
+        "gm_weighted_std": float(gm_weighted_std),
+        "tau_mean": float(np.mean(tau_vals)) if tau_vals.size else float("nan"),
+        "tau_std": float(np.std(tau_vals)) if tau_vals.size else float("nan"),
+    }
+    return scenario, gm_weighted_std, fwhm_top
 
 
 def run_experiment(
@@ -430,74 +460,103 @@ def run_experiment(
     tau1 = _estimate_tau_for_fwhm(g1, fwhm_mm=float(fwhm_mm))
     tau1p = _estimate_tau_for_fwhm(g1p, fwhm_mm=float(fwhm_mm))
 
-    sm1 = _smooth_noise_on_graph(g1, tau1, noise)
-    sm1p = _smooth_noise_on_graph(g1p, tau1p, noise)
+    gm_component_labels, gm_nodes = _gm_components_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
 
-    fwhm_top_1 = _estimate_fwhm_for_top_components(g1, sm1, n_components=5)
-    fwhm_top_1p = _estimate_fwhm_for_top_components(g1, sm1p, n_components=5)
+    baseline, gm_std_1, fwhm_top_1 = _scenario_result(
+        graph_name="original",
+        g_smooth=g1,
+        tau_by_label=tau1,
+        gm_component_labels=gm_component_labels,
+        eval_labels=g1.labels,
+        eval_unique_nodes=g1.unique_nodes,
+        noise=noise,
+    )
+    pruned, gm_std_1p, fwhm_top_1p = _scenario_result(
+        graph_name="pruned",
+        g_smooth=g1p,
+        tau_by_label=tau1p,
+        gm_component_labels=gm_component_labels,
+        eval_labels=g1.labels,
+        eval_unique_nodes=g1.unique_nodes,
+        noise=noise,
+    )
+    mixed, gm_std_mixed, fwhm_top_mixed = _scenario_result(
+        graph_name="pruned_original_tau",
+        g_smooth=g1p,
+        tau_by_label=tau1,
+        gm_component_labels=gm_component_labels,
+        eval_labels=g1.labels,
+        eval_unique_nodes=g1.unique_nodes,
+        noise=noise,
+    )
 
-    gm_nodes = _gm_nodes_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
-
-    gm_std_1, gm_std_per_1 = _gm_std_summary(sm1, gm_nodes, g1.labels, g1.unique_nodes)
-    # Use g1 component definition for the pruned-smoothed signal as well (compare on same components)
-    gm_std_1p, gm_std_per_1p = _gm_std_summary(sm1p, gm_nodes, g1.labels, g1.unique_nodes)
-
-    # Write one-row CSV + optional per-component breakdown columns
+    # Assemble CSV with one row per scenario
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
 
-    all_labels = sorted(set(gm_std_per_1.keys()) | set(gm_std_per_1p.keys()))
+    tau_labels_all = sorted(set(tau1.keys()) | set(tau1p.keys()))
+
     fieldnames = [
+        "graph",
         "fwhm_mm",
         "noise_std",
         "random_seed",
         "gm_threshold",
-        "n_nodes_1mm",
+        "graph_voxel_size_mm",
+        "graph_n_nodes",
+        "graph_n_edges",
         "n_edges_1mm",
         "n_edges_1mm_pruned",
-        "gm_weighted_std_1mm",
-        "gm_weighted_std_1mm_pruned",
-        "gm_std_ratio_pruned_over_baseline",
+        "gm_weighted_std",
+        "gm_std_ratio_to_original",
+        "tau_mean",
+        "tau_std",
     ]
     for i in range(1, 6):
-        fieldnames.append(f"fwhm_top{i}_label_1mm")
-        fieldnames.append(f"fwhm_top{i}_value_1mm")
-        fieldnames.append(f"fwhm_top{i}_label_1mm_pruned")
-        fieldnames.append(f"fwhm_top{i}_value_1mm_pruned")
-    for lbl in all_labels:
-        fieldnames.append(f"gm_std_comp_{lbl}_1mm")
-        fieldnames.append(f"gm_std_comp_{lbl}_1mm_pruned")
+        fieldnames.append(f"fwhm_top{i}_label")
+        fieldnames.append(f"fwhm_top{i}_value")
+    for lbl in tau_labels_all:
+        fieldnames.append(f"tau_label_{lbl}")
 
-    row = {
-        "fwhm_mm": float(fwhm_mm),
-        "noise_std": float(noise_std),
-        "random_seed": ("" if random_seed is None else int(random_seed)),
-        "gm_threshold": float(gm_threshold),
-        "n_nodes_1mm": int(g1.unique_nodes.size),
-        "n_edges_1mm": int(g1.edge_src.size),
-        "n_edges_1mm_pruned": int(pr_src.size),
-        "gm_weighted_std_1mm": float(gm_std_1),
-        "gm_weighted_std_1mm_pruned": float(gm_std_1p),
-        "gm_std_ratio_pruned_over_baseline": float(gm_std_1p / gm_std_1) if np.isfinite(gm_std_1) and gm_std_1 != 0 else float("nan"),
-    }
-    for i in range(1, 6):
-        lbl1 = fwhm_top_1[i - 1][0] if len(fwhm_top_1) >= i else ""
-        val1 = fwhm_top_1[i - 1][1] if len(fwhm_top_1) >= i else float("nan")
-        lbl1p = fwhm_top_1p[i - 1][0] if len(fwhm_top_1p) >= i else ""
-        val1p = fwhm_top_1p[i - 1][1] if len(fwhm_top_1p) >= i else float("nan")
-        row[f"fwhm_top{i}_label_1mm"] = lbl1
-        row[f"fwhm_top{i}_value_1mm"] = float(val1) if val1 != "" else float("nan")
-        row[f"fwhm_top{i}_label_1mm_pruned"] = lbl1p
-        row[f"fwhm_top{i}_value_1mm_pruned"] = float(val1p) if val1p != "" else float("nan")
-    for lbl in all_labels:
-        row[f"gm_std_comp_{lbl}_1mm"] = float(gm_std_per_1.get(lbl, float("nan")))
-        row[f"gm_std_comp_{lbl}_1mm_pruned"] = float(gm_std_per_1p.get(lbl, float("nan")))
+    rows = []
+    for scenario, gm_std_val, fwhm_top, tau_map in [
+        (baseline, gm_std_1, fwhm_top_1, tau1),
+        (pruned, gm_std_1p, fwhm_top_1p, tau1p),
+        (mixed, gm_std_mixed, fwhm_top_mixed, tau1),
+    ]:
+        row = {
+            "graph": scenario["graph"],
+            "fwhm_mm": float(fwhm_mm),
+            "noise_std": float(noise_std),
+            "random_seed": ("" if random_seed is None else int(random_seed)),
+            "gm_threshold": float(gm_threshold),
+            "graph_voxel_size_mm": scenario["graph_voxel_size_mm"],
+            "graph_n_nodes": scenario["graph_n_nodes"],
+            "graph_n_edges": scenario["graph_n_edges"],
+            "n_edges_1mm": int(g1.edge_src.size),
+            "n_edges_1mm_pruned": int(pr_src.size),
+            "gm_weighted_std": gm_std_val,
+            "gm_std_ratio_to_original": float(
+                gm_std_val / gm_std_1
+            ) if np.isfinite(gm_std_1) and gm_std_1 != 0 else float("nan"),
+            "tau_mean": scenario["tau_mean"],
+            "tau_std": scenario["tau_std"],
+        }
+        for i in range(1, 6):
+            lbl = fwhm_top[i - 1][0] if len(fwhm_top) >= i else ""
+            val = fwhm_top[i - 1][1] if len(fwhm_top) >= i else float("nan")
+            row[f"fwhm_top{i}_label"] = lbl
+            row[f"fwhm_top{i}_value"] = float(val) if val != "" else float("nan")
+        for lbl in tau_labels_all:
+            row[f"tau_label_{lbl}"] = float(tau_map.get(lbl, float("nan")))
+        rows.append(row)
 
     with open(output_csv, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
-        w.writerow(row)
+        for row in rows:
+            w.writerow(row)
 
-    return row
+    return rows
 
 
 def main():
