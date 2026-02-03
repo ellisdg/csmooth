@@ -24,7 +24,7 @@ def plot_results(in_file, out_file, column, column_names=None):
     sns.set_palette("muted")
     n_cols = len(column)
     fig, axes = plt.subplots(1, n_cols, figsize=(n_cols * 4, 4),
-                             constrained_layout=False)
+                             constrained_layout=True)
     try:
         axes[0]
     except TypeError:
@@ -32,13 +32,19 @@ def plot_results(in_file, out_file, column, column_names=None):
 
     for col, ax, label in zip(column, axes, column_names):
         col_dfs = list()
-        for method in ["gaussian", "constrained"]:
-                col_name = f"{method}_{col}"
-                tmp_df = df[["label", "fwhm_mm", col_name]].copy()
-                tmp_df["method"] = method
-                tmp_df[col] = tmp_df[col_name]
-                tmp_df.set_index(["label", "fwhm_mm", "method"])
-                col_dfs.append(tmp_df)
+        for method in ["raw", "gaussian", "constrained"]:
+            col_name = f"{method}_{col}"
+            tmp_df = df[["label", "fwhm_mm", col_name]].copy()
+            tmp_df["method"] = method
+            tmp_df[col] = tmp_df[col_name]
+            if method == "raw":
+                tmp_df["fwhm_mm"] = 0.0
+                # remove duplicate rows
+                tmp_df = tmp_df.drop_duplicates(subset=["label", "fwhm_mm", "method"])
+            tmp_df.set_index(["label", "fwhm_mm", "method"])
+            col_dfs.append(tmp_df)
+
+
         col_df = pd.concat(col_dfs, axis=0)
         sns.boxplot(data=col_df, x="fwhm_mm", y=col, hue="method", ax=ax,
                     legend=ax == axes[-1])
