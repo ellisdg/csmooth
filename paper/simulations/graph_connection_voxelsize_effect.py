@@ -130,6 +130,10 @@ def _build_parent_mapping_1mm_to_3mm(g1: GraphData, g3: GraphData) -> np.ndarray
     xyz1_nodes = xyz1[nodes1]
     xyz3_nodes = xyz3[nodes3]
 
+    # If there are no 3mm nodes, leave parent mapping as all -1
+    if xyz3_nodes.size == 0:
+        return parent
+
     # For 3mm nodes, build a nearest-neighbor lookup.
     # Avoid scipy dependency: brute force is okay for this targeted script, but we can do chunking.
     # Complexity: O(N1*N3). On typical masks this can be heavy; we chunk across 1mm nodes.
@@ -404,6 +408,118 @@ def _scenario_result(
     return scenario, gm_weighted_std, fwhm_top
 
 
+def plot_axial_comparison(
+    panels: list[tuple[str, np.ndarray, GraphData]],
+    surfaces: tuple[str, str, str, str] | None = None,
+    slice_index: int | None = None,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    figsize: tuple[float, float] = (12.0, 4.0),
+) -> "matplotlib.figure.Figure":
+    """Plot side-by-side axial slices of smoothed images with optional surface overlays.
+
+    panels: list of (title, smoothed_flat_array, GraphData). Each smoothed_flat_array should be a
+            1D array that can be reshaped to the graph's mask shape (ravel order).
+    surfaces: optional tuple of 4 surface file paths (pial_l, pial_r, white_l, white_r).
+    slice_index: axial slice index (k). If None, uses the center axial slice of the first panel.
+
+    Returns a matplotlib Figure.
+    """
+    # Local imports to avoid forcing heavy deps at module import time
+    import matplotlib.pyplot as plt
+    import nibabel as nib
+
+    if not panels:
+        raise ValueError("panels must contain at least one (title, array, GraphData) tuple")
+
+    # determine slice index from first graph if not provided
+    _, arr0, g0 = panels[0]
+    vol_shape = tuple(int(x) for x in g0.mask_3d.shape)
+    if slice_index is None:
+        slice_index = int(vol_shape[2] // 2)
+
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=figsize, squeeze=False)
+    axes = axes[0]
+
+    # prepare surface vertices
+    surf_vertices: list[np.ndarray | None] = [None, None, None, None]
+    if surfaces is not None:
+        for i, surf_path in enumerate(surfaces):
+            if surf_path is None:
+                surf_vertices[i] = None
+                continue
+            try:
+                gi = nib.load(surf_path)
+                # Gifti: vertices often in .darrays[0].data
+                v = None
+                if hasattr(gi, "darrays") and getattr(gi, "darrays"):
+                    try:
+                        v = np.asarray(gi.darrays[0].data, dtype=float)
+                    except Exception:
+                        v = None
+                # fallback: some readers expose .get_arrays_from_intent
+                if v is None:
+                    try:
+                        arrs = gi.get_arrays_from_intent("NIFTI_INTENT_POINTSET")
+                        if arrs:
+                            v = np.asarray(arrs[0].data, dtype=float)
+                    except Exception:
+                        v = None
+                surf_vertices[i] = v
+            except Exception:
+                surf_vertices[i] = None
+
+    im = None
+    for ax, (title, smoothed_flat, g) in zip(axes, panels):
+        # reshape to volume and get axial slice
+        vol = np.asarray(smoothed_flat, dtype=float).reshape(tuple(int(x) for x in g.mask_3d.shape))
+        slice_img = vol[:, :, slice_index]
+
+        # rotate for a more conventional radiological-ish view
+        im = ax.imshow(
+            np.rot90(slice_img),
+            cmap=cmap,
+            origin="lower",
+            vmin=vmin,
+            vmax=vmax,
+            interpolation="nearest",
+        )
+        ax.set_title(title)
+        ax.set_axis_off()
+
+        # overlay surface vertices projected into voxel space for this graph affine
+        inv_aff = np.linalg.inv(np.asarray(g.affine))
+        for v in surf_vertices:
+            if v is None:
+                continue
+            try:
+                hom = np.c_[v, np.ones((v.shape[0], 1), dtype=float)]
+                ijk = (inv_aff @ hom.T).T[:, :3]
+                k_idx = np.round(ijk[:, 2]).astype(int)
+                mask_k = k_idx == int(slice_index)
+                if not np.any(mask_k):
+                    continue
+                xs = ijk[mask_k, 0]
+                ys = ijk[mask_k, 1]
+                # imshow used np.rot90 -> map coordinates accordingly
+                w = g.mask_3d.shape[0]
+                plotted_x = ys
+                plotted_y = (w - 1 - xs)
+                ax.scatter(plotted_x, plotted_y, s=1.5, c="r", alpha=0.8, linewidths=0)
+            except Exception:
+                # skip any surface on failure
+                continue
+
+    # add a colorbar if we plotted anything
+    if im is not None:
+        cbar = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.9)
+        cbar.set_label("smoothed value")
+    fig.tight_layout()
+    return fig
+
+
 def run_experiment(
     t1w_file: str,
     brain_mask_file: str,
@@ -595,12 +711,20 @@ def run_experiment(
         ("fixed_tau", pruned_fixed, tau1p_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed, g1p, noise),
     ]
 
+    # Prepare containers to hold panels for plotting per experiment type
+    plot_panels: dict[str, list[tuple[str, np.ndarray, GraphData]]] = {"estimated_fwhm": [], "fixed_tau": []}
+
     for experiment, scenario, tau_map, gm_std_val, fwhm_top, graph_obj, smoothed_noise in scenarios:
         # derive GM/WM weighted FWHM and WM weighted std
         smoothed_signal = _smooth_noise_on_graph(graph_obj, tau_map, smoothed_noise)
         gm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, gm_component_labels)
         wm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, wm_component_labels)
         wm_std_weighted = _gm_std_summary(smoothed_signal, wm_component_labels, graph_obj.labels, graph_obj.unique_nodes)
+
+        # store panel (title, flattened signal, graph) for later plotting
+        panel_title = f"{scenario['graph']}_{experiment}"
+        plot_panels.setdefault(experiment, []).append((panel_title, smoothed_signal, graph_obj))
+
         row = {
             "experiment": experiment,
             "graph": scenario["graph"],
@@ -637,6 +761,28 @@ def run_experiment(
         w.writeheader()
         for row in rows:
             w.writerow(row)
+
+    # After assembling rows, create comparison plots per experiment type
+    try:
+        for exp_type, panels in plot_panels.items():
+            if not panels:
+                continue
+            try:
+                fig = plot_axial_comparison(panels, surfaces=surfaces)
+                out_png = os.path.join(os.path.dirname(output_csv), f"comparison_{exp_type}.png")
+                # Use tight bbox and dpi for publication-quality
+                fig.savefig(out_png, dpi=300, bbox_inches="tight")
+                try:
+                    import matplotlib.pyplot as plt
+                    plt.close(fig)
+                except Exception:
+                    pass
+            except Exception:
+                # don't fail the entire experiment run if plotting fails; continue
+                continue
+    except Exception:
+        # defensive: ignore plotting issues
+        pass
 
     return rows
 

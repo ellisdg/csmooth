@@ -167,7 +167,7 @@ def mask2graph(mask_array):
     """
     Convert a 3D binary array to a graph representation using 26-connectivity.
     :param mask_array: 3D binary numpy array
-    :return: adjacency matrix in sparse format
+    :return:
     """
     indices = np.argwhere(mask_array)
     D, H, W = mask_array.shape
