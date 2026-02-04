@@ -2,6 +2,8 @@ numpy
 nibabel
 scipy
 nilearn
+pandas
+matplotlib
 tqdm
 networkx
 nx-parallel
@@ -11,3 +13,4 @@ embreex
 xxhash
 nitransforms<25.0.0
 templateflow
+pyyaml

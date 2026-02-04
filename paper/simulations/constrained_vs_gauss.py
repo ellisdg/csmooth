@@ -320,8 +320,16 @@ def run_constrained_vs_gauss_experiment_single_region(
         prevalence = float(np.mean(gt_mask[domain_idx_global].astype(float))) if domain_idx_global.size else 0.0
         pred_threshold_quantile = float(1.0 - prevalence)
 
+    gt_vmin, gt_vmax, gt_thr_plot = _plot_value_range(gt_field, domain_mask)
+    raw_vmin, raw_vmax, _ = _plot_value_range(raw_tmap_3d, domain_mask)
+
     rows: list[dict] = []
     plot_dir = os.path.join(output_dir, "plots")
+    combined_maps: list[np.ndarray] = []
+    combined_paths: list[str] = []
+    combined_thresholds: list[float] = []
+    no_thr = float("-inf")
+    crop_bounds = None
     if plot_outputs and t1_img is not None:
         os.makedirs(plot_dir, exist_ok=True)
         plot_surfaces = [
@@ -332,9 +340,23 @@ def run_constrained_vs_gauss_experiment_single_region(
         ]
         center_z = _map_aparc_center_to_t1_z(aparc_img, t1_img, center_ijk)
         slices = _centered_slice_block(center_z, t1_img.shape[2], 7)
+        crop_bounds = _compute_crop_bounds_from_stat_map(
+            stat_map_img=gt_field_img,
+            t1_img=t1_img,
+            slice_index=int(slices[len(slices) // 2]),
+            threshold=float(gt_thr_plot),
+            padding=10,
+        )
+        gt_path = os.path.join(output_dir, "gt_field.nii.gz")
+        raw_path = os.path.join(output_dir, "raw_tmap.nii.gz")
+        combined_maps = [gt_field, raw_tmap_3d]
+        combined_paths = [gt_path, raw_path]
+        combined_thresholds = [gt_thr_plot, float("nan")]
     else:
         plot_surfaces = None
         slices = None
+
+    multi_fwhm = len(fwhm_list) > 1
 
     for fwhm in fwhm_list:
         fwhm = float(fwhm)
@@ -503,15 +525,10 @@ def run_constrained_vs_gauss_experiment_single_region(
         rows.append(row)
 
         if plot_outputs and t1_img is not None and plot_surfaces is not None and slices is not None:
-            gt_path = os.path.join(output_dir, "gt_field.nii.gz")
-            raw_path = os.path.join(output_dir, "raw_tmap.nii.gz")
             stat_paths = [gt_path, raw_path, constrained_path, gaussian_path]
-
-            gt_vmin, gt_vmax, gt_thr_plot = _plot_value_range(gt_field, domain_mask)
             # compute per-map vmin/vmax for plotting color scale, but use the metric-computed
             # prediction thresholds (pred_thr) for contouring / binary overlays so that plots
             # match the threshold used to compute dice/sensitivity/etc.
-            raw_vmin, raw_vmax, _ = _plot_value_range(raw_tmap_3d, domain_mask)
             con_vmin, con_vmax, _ = _plot_value_range(constrained, domain_mask)
             gau_vmin, gau_vmax, _ = _plot_value_range(gaussian, domain_mask)
 
@@ -520,9 +537,11 @@ def run_constrained_vs_gauss_experiment_single_region(
             con_thr = float(constrained_metrics.get("pred_thr", float("nan")))
             gau_thr = float(gaussian_metrics.get("pred_thr", float("nan")))
 
+            raw_thr_for_plot = raw_thr if np.isfinite(raw_thr) else float("-inf")
+
             # For the combined multi-map plot, prefer the mean of available pred thresholds so
             # the shared contour roughly reflects the prediction threshold used by the metrics.
-            thr_values = [v for v in (raw_thr, con_thr, gau_thr) if not np.isnan(v)]
+            thr_values = [v for v in (raw_thr, con_thr, gau_thr) if v is not None and not np.isnan(v)]
             if thr_values:
                 shared_thr = float(np.mean(thr_values))
                 shared_vmin, shared_vmax, _ = _plot_value_range_multi(
@@ -535,14 +554,6 @@ def run_constrained_vs_gauss_experiment_single_region(
                     [gt_field, raw_tmap_3d, constrained, gaussian],
                     domain_mask,
                 )
-
-            crop_bounds = _compute_crop_bounds_from_stat_map(
-                 stat_map_img=gt_field_img,
-                 t1_img=t1_img,
-                 slice_index=int(slices[len(slices) // 2]),
-                 threshold=float(gt_thr_plot),
-                 padding=10,
-             )
 
             combo_fig = plot_multiple_stat_maps(
                 mri_fname=t1_img.get_filename(),
@@ -557,7 +568,7 @@ def run_constrained_vs_gauss_experiment_single_region(
                 # Provide per-map thresholds so each map's contour reflects the
                 # threshold used to compute metrics (pred_thr). The color scale
                 # (vmin/vmax) is shared so constrained and gaussian use the same cmap range.
-                stat_map_thresholds=[gt_thr_plot, raw_thr, con_thr, gau_thr],
+                stat_map_thresholds=[gt_thr_plot, raw_thr_for_plot, con_thr, gau_thr],
                 mri_alpha=0.9,
                 surface_alpha=0.9,
                 stat_map_interpolation="nearest",
@@ -576,7 +587,7 @@ def run_constrained_vs_gauss_experiment_single_region(
 
             for name, path, vmin, vmax, thr in [
                 ("gt", gt_path, gt_vmin, gt_vmax, gt_thr_plot),
-                ("raw", raw_path, raw_vmin, raw_vmax, raw_thr),
+                ("raw", raw_path, raw_vmin, raw_vmax, raw_thr_for_plot),
                 ("constrained", constrained_path, con_vmin, con_vmax, con_thr),
                 ("gaussian", gaussian_path, gau_vmin, gau_vmax, gau_thr),
             ]:
@@ -600,6 +611,40 @@ def run_constrained_vs_gauss_experiment_single_region(
                 out_png = os.path.join(plot_dir, f"{name}_fwhm_{int(round(fwhm))}mm.png")
                 fig.savefig(out_png, dpi=300)
                 plt.close(fig)
+
+            # Track combined inputs for the final multi-map figure
+            combined_maps = [gt_field, raw_tmap_3d, constrained, gaussian]
+            combined_paths = [gt_path, raw_path, constrained_path, gaussian_path]
+            combined_thresholds = [gt_thr_plot, raw_thr_for_plot, con_thr, gau_thr]
+
+    if multi_fwhm and plot_outputs and t1_img is not None and plot_surfaces is not None and slices is not None and len(combined_paths) > 2:
+        combined_vmin, combined_vmax, _ = _plot_value_range_multi(combined_maps, domain_mask)
+        combined_fig = plot_multiple_stat_maps(
+            mri_fname=t1_img.get_filename(),
+            surfaces=plot_surfaces,
+            stat_map_fnames=combined_paths,
+            slices=[int(slices[len(slices) // 2])],
+            orientation="axial",
+            width=1024,
+            slices_as_subplots=True,
+            stat_map_cmap="hot",
+            stat_map_alpha=0.9,
+            stat_map_thresholds=combined_thresholds,
+            mri_alpha=0.9,
+            surface_alpha=0.9,
+            stat_map_interpolation="nearest",
+            surface_thickness=0.25,
+            show=False,
+            stat_map_vmin=combined_vmin,
+            stat_map_vmax=combined_vmax,
+            colorbar=True,
+            crop_map_fname=combined_paths[0],
+            crop_stat_map_threshold=gt_thr_plot,
+            crop_padding=10,
+        )
+        combo_all_png = os.path.join(plot_dir, "combined_all_fwhm.png")
+        combined_fig.savefig(combo_all_png, dpi=300)
+        plt.close(combined_fig)
 
     return rows, optimal_taus_by_fwhm
 

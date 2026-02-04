@@ -312,11 +312,48 @@ def test_scenario_result_composes_subfunctions(monkeypatch):
 
     tau_map = {0: 1.0}
     gm_labels = np.array([], dtype=int)
-    scenario, gm_std, fwhm_top = gve._scenario_result("test", g, tau_map, gm_labels, labels, unique_nodes, np.array([0.0, 0.0]))
+    scenario, gm_std, fwhm_top, smoothed = gve._scenario_result("test", g, tau_map, gm_labels, labels, unique_nodes, np.array([0.0, 0.0]))
     assert scenario["graph"] == "test"
     assert scenario["graph_n_nodes"] == 2
     assert scenario["gm_weighted_std"] == pytest.approx(0.42)
     assert fwhm_top == [(0, 2.5)]
+    assert smoothed.shape == (2,)
+
+
+def test_scenario_result_integration_monkeypatched(monkeypatch):
+    # Build a minimal graph with one component and known nodes
+    unique_nodes = np.array([0, 1, 2], dtype=int)
+    edge_src = np.array([0, 1], dtype=int)
+    edge_dst = np.array([1, 2], dtype=int)
+    edge_dist = np.array([1.0, 1.0], dtype=float)
+    labels = np.array([0, 0, 0], dtype=int)
+    sorted_labels = np.array([0], dtype=int)
+    g = GraphData(1.0, np.eye(4), np.ones((3, 1, 1), dtype=bool), unique_nodes, edge_src, edge_dst, edge_dist, labels, sorted_labels)
+
+    # Patch subroutines to deterministic values
+    monkeypatch.setattr(gve, "_smooth_noise_on_graph", lambda g_smooth, tau_by_label, noise: np.array([1.0, 2.0, 3.0]))
+    monkeypatch.setattr(gve, "_gm_std_summary", lambda values, gm_labels, labels, unique_nodes: 0.5)
+    monkeypatch.setattr(gve, "_estimate_fwhm_for_top_components", lambda g_smooth, smoothed, n_components=5: [(0, 4.0)])
+
+    tau_map = {0: 2.0}
+    gm_labels = np.array([0], dtype=int)
+    scenario, gm_std, fwhm_top, smoothed = gve._scenario_result(
+        graph_name="integration",
+        g_smooth=g,
+        tau_by_label=tau_map,
+        gm_component_labels=gm_labels,
+        eval_labels=labels,
+        eval_unique_nodes=unique_nodes,
+        noise=np.zeros(3, dtype=float),
+    )
+
+    assert scenario["graph"] == "integration"
+    assert scenario["graph_n_nodes"] == 3
+    assert scenario["graph_n_edges"] == 2
+    assert scenario["gm_weighted_std"] == pytest.approx(0.5)
+    assert scenario["tau_mean"] == pytest.approx(2.0)
+    assert fwhm_top == [(0, 4.0)]
+    assert smoothed.shape == (3,)
 
 
 def test_parent_mapping_spatial_nearest_with_spacing():
@@ -385,7 +422,7 @@ def test_scenario_result_integration_monkeypatched(monkeypatch):
 
     tau_map = {0: 2.0}
     gm_labels = np.array([0], dtype=int)
-    scenario, gm_std, fwhm_top = gve._scenario_result(
+    scenario, gm_std, fwhm_top, smoothed = gve._scenario_result(
         graph_name="integration",
         g_smooth=g,
         tau_by_label=tau_map,
@@ -401,6 +438,7 @@ def test_scenario_result_integration_monkeypatched(monkeypatch):
     assert scenario["gm_weighted_std"] == pytest.approx(0.5)
     assert scenario["tau_mean"] == pytest.approx(2.0)
     assert fwhm_top == [(0, 4.0)]
+    assert smoothed.shape == (3,)
 
 
 def test_parent_mapping_matches_bruteforce_large_random():
@@ -447,7 +485,10 @@ def test_parent_mapping_matches_bruteforce_large_random():
     brute = np.argmin(d2, axis=1)
 
     # parent mapping should match brute for all nodes
-    assert np.array_equal(parent, brute)
+    # KD-tree ties may differ from argmin ordering; ensure chosen parent achieves the min distance
+    d2_parent = d2[np.arange(d2.shape[0]), parent]
+    d2_min = d2.min(axis=1)
+    assert np.allclose(d2_parent, d2_min)
 
 
 def test_estimate_tau_for_fwhm_fill_average(monkeypatch):

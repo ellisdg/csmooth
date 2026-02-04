@@ -46,6 +46,8 @@ from csmooth.smooth import select_nodes, find_optimal_tau
 from csmooth.heat import heat_kernel_smoothing
 from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 from csmooth.fwhm import estimate_fwhm
+from scipy.spatial import cKDTree
+from paper.sensory.archive.plot_stat_maps import plot_multiple_stat_maps
 
 
 @dataclass(frozen=True)
@@ -134,18 +136,10 @@ def _build_parent_mapping_1mm_to_3mm(g1: GraphData, g3: GraphData) -> np.ndarray
     if xyz3_nodes.size == 0:
         return parent
 
-    # For 3mm nodes, build a nearest-neighbor lookup.
-    # Avoid scipy dependency: brute force is okay for this targeted script, but we can do chunking.
-    # Complexity: O(N1*N3). On typical masks this can be heavy; we chunk across 1mm nodes.
-    # If this becomes a bottleneck, we can switch to sklearn NearestNeighbors or scipy.spatial.cKDTree.
-    chunk = 5000
-    for i0 in range(0, xyz1_nodes.shape[0], chunk):
-        i1 = min(i0 + chunk, xyz1_nodes.shape[0])
-        x = xyz1_nodes[i0:i1]
-        # squared distances to all 3mm nodes
-        d2 = np.sum((x[:, None, :] - xyz3_nodes[None, :, :]) ** 2, axis=2)
-        nn = np.argmin(d2, axis=1)
-        parent[nodes1[i0:i1]] = nodes3[nn]
+    # Accelerated nearest-neighbor lookup via KD-tree (orders of magnitude faster than brute force)
+    tree = cKDTree(xyz3_nodes)
+    _, nn_idx = tree.query(xyz1_nodes, k=1)
+    parent[nodes1] = nodes3[np.asarray(nn_idx, dtype=int)]
 
     return parent
 
@@ -390,7 +384,7 @@ def _scenario_result(
     eval_unique_nodes: np.ndarray,
     noise: np.ndarray,
     n_fwhm_components: int = 5,
-) -> tuple[dict, float, list[tuple[int, float]]]:
+) -> tuple[dict, float, list[tuple[int, float]], np.ndarray]:
     """Smooth noise on a graph and return scenario-level metrics."""
     smoothed = _smooth_noise_on_graph(g_smooth, tau_by_label, noise)
     gm_weighted_std = _gm_std_summary(smoothed, gm_component_labels, eval_labels, eval_unique_nodes)
@@ -405,119 +399,14 @@ def _scenario_result(
         "tau_mean": float(np.mean(tau_vals)) if tau_vals.size else float("nan"),
         "tau_std": float(np.std(tau_vals)) if tau_vals.size else float("nan"),
     }
-    return scenario, gm_weighted_std, fwhm_top
+    return scenario, gm_weighted_std, fwhm_top, smoothed
 
 
-def plot_axial_comparison(
-    panels: list[tuple[str, np.ndarray, GraphData]],
-    surfaces: tuple[str, str, str, str] | None = None,
-    slice_index: int | None = None,
-    cmap: str = "viridis",
-    vmin: float | None = None,
-    vmax: float | None = None,
-    figsize: tuple[float, float] = (12.0, 4.0),
-) -> "matplotlib.figure.Figure":
-    """Plot side-by-side axial slices of smoothed images with optional surface overlays.
-
-    panels: list of (title, smoothed_flat_array, GraphData). Each smoothed_flat_array should be a
-            1D array that can be reshaped to the graph's mask shape (ravel order).
-    surfaces: optional tuple of 4 surface file paths (pial_l, pial_r, white_l, white_r).
-    slice_index: axial slice index (k). If None, uses the center axial slice of the first panel.
-
-    Returns a matplotlib Figure.
-    """
-    # Local imports to avoid forcing heavy deps at module import time
-    import matplotlib.pyplot as plt
-    import nibabel as nib
-
-    if not panels:
-        raise ValueError("panels must contain at least one (title, array, GraphData) tuple")
-
-    # determine slice index from first graph if not provided
-    _, arr0, g0 = panels[0]
-    vol_shape = tuple(int(x) for x in g0.mask_3d.shape)
-    if slice_index is None:
-        slice_index = int(vol_shape[2] // 2)
-
-    n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=figsize, squeeze=False)
-    axes = axes[0]
-
-    # prepare surface vertices
-    surf_vertices: list[np.ndarray | None] = [None, None, None, None]
-    if surfaces is not None:
-        for i, surf_path in enumerate(surfaces):
-            if surf_path is None:
-                surf_vertices[i] = None
-                continue
-            try:
-                gi = nib.load(surf_path)
-                # Gifti: vertices often in .darrays[0].data
-                v = None
-                if hasattr(gi, "darrays") and getattr(gi, "darrays"):
-                    try:
-                        v = np.asarray(gi.darrays[0].data, dtype=float)
-                    except Exception:
-                        v = None
-                # fallback: some readers expose .get_arrays_from_intent
-                if v is None:
-                    try:
-                        arrs = gi.get_arrays_from_intent("NIFTI_INTENT_POINTSET")
-                        if arrs:
-                            v = np.asarray(arrs[0].data, dtype=float)
-                    except Exception:
-                        v = None
-                surf_vertices[i] = v
-            except Exception:
-                surf_vertices[i] = None
-
-    im = None
-    for ax, (title, smoothed_flat, g) in zip(axes, panels):
-        # reshape to volume and get axial slice
-        vol = np.asarray(smoothed_flat, dtype=float).reshape(tuple(int(x) for x in g.mask_3d.shape))
-        slice_img = vol[:, :, slice_index]
-
-        # rotate for a more conventional radiological-ish view
-        im = ax.imshow(
-            np.rot90(slice_img),
-            cmap=cmap,
-            origin="lower",
-            vmin=vmin,
-            vmax=vmax,
-            interpolation="nearest",
-        )
-        ax.set_title(title)
-        ax.set_axis_off()
-
-        # overlay surface vertices projected into voxel space for this graph affine
-        inv_aff = np.linalg.inv(np.asarray(g.affine))
-        for v in surf_vertices:
-            if v is None:
-                continue
-            try:
-                hom = np.c_[v, np.ones((v.shape[0], 1), dtype=float)]
-                ijk = (inv_aff @ hom.T).T[:, :3]
-                k_idx = np.round(ijk[:, 2]).astype(int)
-                mask_k = k_idx == int(slice_index)
-                if not np.any(mask_k):
-                    continue
-                xs = ijk[mask_k, 0]
-                ys = ijk[mask_k, 1]
-                # imshow used np.rot90 -> map coordinates accordingly
-                w = g.mask_3d.shape[0]
-                plotted_x = ys
-                plotted_y = (w - 1 - xs)
-                ax.scatter(plotted_x, plotted_y, s=1.5, c="r", alpha=0.8, linewidths=0)
-            except Exception:
-                # skip any surface on failure
-                continue
-
-    # add a colorbar if we plotted anything
-    if im is not None:
-        cbar = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.9)
-        cbar.set_label("smoothed value")
-    fig.tight_layout()
-    return fig
+def _save_smoothed_volume(smoothed: np.ndarray, g: GraphData, out_path: str) -> str:
+    """Save flattened smoothed data to NIfTI aligned to the graph affine."""
+    vol = np.asarray(smoothed, dtype=float).reshape(tuple(int(x) for x in g.mask_3d.shape))
+    nib.save(nib.Nifti1Image(vol, g.affine), out_path)
+    return out_path
 
 
 def run_experiment(
@@ -587,7 +476,7 @@ def run_experiment(
     gm_component_labels, _ = _gm_components_from_probseg(g1, gm_prob_img, gm_threshold=float(gm_threshold))
     wm_component_labels, _ = _gm_components_from_probseg(g1, wm_prob_img, gm_threshold=float(wm_threshold))
 
-    baseline, gm_std_1, fwhm_top_1 = _scenario_result(
+    baseline, gm_std_1, fwhm_top_1, smoothed_baseline = _scenario_result(
         graph_name="original",
         g_smooth=g1,
         tau_by_label=tau1_est,
@@ -596,7 +485,7 @@ def run_experiment(
         eval_unique_nodes=g1.unique_nodes,
         noise=noise,
     )
-    pruned, gm_std_1p, fwhm_top_1p = _scenario_result(
+    pruned, gm_std_1p, fwhm_top_1p, smoothed_pruned = _scenario_result(
         graph_name="pruned",
         g_smooth=g1p,
         tau_by_label=tau1p_est,
@@ -605,18 +494,9 @@ def run_experiment(
         eval_unique_nodes=g1.unique_nodes,
         noise=noise,
     )
-    mixed, gm_std_mixed, fwhm_top_mixed = _scenario_result(
-        graph_name="pruned_original_tau",
-        g_smooth=g1p,
-        tau_by_label=tau1_est,
-        gm_component_labels=gm_component_labels,
-        eval_labels=g1.labels,
-        eval_unique_nodes=g1.unique_nodes,
-        noise=noise,
-    )
 
     # Fixed-tau smoothing on graphs (baseline/pruned) using supplied tau_fixed
-    baseline_fixed, gm_std_1_fixed, fwhm_top_1_fixed = _scenario_result(
+    baseline_fixed, gm_std_1_fixed, fwhm_top_1_fixed, smoothed_baseline_fixed = _scenario_result(
         graph_name="original",
         g_smooth=g1,
         tau_by_label=tau1_fixed,
@@ -625,7 +505,7 @@ def run_experiment(
         eval_unique_nodes=g1.unique_nodes,
         noise=noise,
     )
-    pruned_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed = _scenario_result(
+    pruned_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed, smoothed_pruned_fixed = _scenario_result(
         graph_name="pruned",
         g_smooth=g1p,
         tau_by_label=tau1p_fixed,
@@ -704,26 +584,26 @@ def run_experiment(
         return float("nan")
 
     scenarios = [
-        ("estimated_fwhm", baseline, tau1_est, gm_std_1, fwhm_top_1, g1, noise),
-        ("estimated_fwhm", pruned, tau1p_est, gm_std_1p, fwhm_top_1p, g1p, noise),
-        ("estimated_fwhm", mixed, tau1_est, gm_std_mixed, fwhm_top_mixed, g1p, noise),
-        ("fixed_tau", baseline_fixed, tau1_fixed, gm_std_1_fixed, fwhm_top_1_fixed, g1, noise),
-        ("fixed_tau", pruned_fixed, tau1p_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed, g1p, noise),
+        ("estimated_fwhm", baseline, tau1_est, gm_std_1, fwhm_top_1, g1, smoothed_baseline),
+        ("estimated_fwhm", pruned, tau1p_est, gm_std_1p, fwhm_top_1p, g1p, smoothed_pruned),
+        ("fixed_tau", baseline_fixed, tau1_fixed, gm_std_1_fixed, fwhm_top_1_fixed, g1, smoothed_baseline_fixed),
+        ("fixed_tau", pruned_fixed, tau1p_fixed, gm_std_1p_fixed, fwhm_top_1p_fixed, g1p, smoothed_pruned_fixed),
     ]
 
-    # Prepare containers to hold panels for plotting per experiment type
-    plot_panels: dict[str, list[tuple[str, np.ndarray, GraphData]]] = {"estimated_fwhm": [], "fixed_tau": []}
+    stat_maps_by_experiment: dict[str, list[str]] = {"estimated_fwhm": [], "fixed_tau": []}
 
-    for experiment, scenario, tau_map, gm_std_val, fwhm_top, graph_obj, smoothed_noise in scenarios:
+    for experiment, scenario, tau_map, gm_std_val, fwhm_top, graph_obj, smoothed_signal in scenarios:
         # derive GM/WM weighted FWHM and WM weighted std
-        smoothed_signal = _smooth_noise_on_graph(graph_obj, tau_map, smoothed_noise)
         gm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, gm_component_labels)
         wm_fwhm_weighted = _component_weighted_fwhm(graph_obj, smoothed_signal, wm_component_labels)
         wm_std_weighted = _gm_std_summary(smoothed_signal, wm_component_labels, graph_obj.labels, graph_obj.unique_nodes)
 
-        # store panel (title, flattened signal, graph) for later plotting
-        panel_title = f"{scenario['graph']}_{experiment}"
-        plot_panels.setdefault(experiment, []).append((panel_title, smoothed_signal, graph_obj))
+        # save smoothed signal as NIfTI for downstream inspection/plotting
+        out_dir = os.path.dirname(output_csv)
+        base_name = os.path.splitext(os.path.basename(output_csv))[0]
+        smoothed_fname = os.path.join(out_dir, f"{base_name}_{scenario['graph']}_{experiment}_smoothed.nii.gz")
+        _save_smoothed_volume(smoothed_signal, graph_obj, smoothed_fname)
+        stat_maps_by_experiment.setdefault(experiment, []).append(smoothed_fname)
 
         row = {
             "experiment": experiment,
@@ -762,15 +642,37 @@ def run_experiment(
         for row in rows:
             w.writerow(row)
 
-    # After assembling rows, create comparison plots per experiment type
+    # After assembling rows, create comparison plots per experiment type using surface overlays
     try:
-        for exp_type, panels in plot_panels.items():
-            if not panels:
+        t1_img = nib.load(t1w_file)
+        k_center = int(t1_img.shape[2] // 2)
+        slices = [x for x in (k_center - 2, k_center, k_center + 2) if 0 <= x < t1_img.shape[2]]
+        surfaces_for_plot = [
+            (pial_l_file, "g"),
+            (pial_r_file, "g"),
+            (white_l_file, "b"),
+            (white_r_file, "b"),
+        ]
+        for exp_type, stat_maps in stat_maps_by_experiment.items():
+            if not stat_maps:
                 continue
             try:
-                fig = plot_axial_comparison(panels, surfaces=surfaces)
+                fig = plot_multiple_stat_maps(
+                    mri_fname=t1w_file,
+                    surfaces=surfaces_for_plot,
+                    stat_map_fnames=stat_maps,
+                    slices=slices,
+                    orientation="axial",
+                    width=512,
+                    stat_map_alpha=0.85,
+                    stat_map_threshold=0.0,
+                    stat_map_interpolation="nearest",
+                    surface_thickness=0.75,
+                    show=False,
+                    colorbar=True,
+                    crop_padding=2,
+                )
                 out_png = os.path.join(os.path.dirname(output_csv), f"comparison_{exp_type}.png")
-                # Use tight bbox and dpi for publication-quality
                 fig.savefig(out_png, dpi=300, bbox_inches="tight")
                 try:
                     import matplotlib.pyplot as plt
@@ -778,10 +680,8 @@ def run_experiment(
                 except Exception:
                     pass
             except Exception:
-                # don't fail the entire experiment run if plotting fails; continue
                 continue
     except Exception:
-        # defensive: ignore plotting issues
         pass
 
     return rows
