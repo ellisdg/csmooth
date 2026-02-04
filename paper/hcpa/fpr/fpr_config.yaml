@@ -1,0 +1,39 @@
+paths:
+  cleaned_dir: /data2/david.ellis/public/HCPA/myderivatives/cleaned
+  csmooth_dir: /data2/david.ellis/public/HCPA/myderivatives/csmooth
+  gaussian_dir: /data2/david.ellis/public/HCPA/myderivatives/gaussian
+  output_root: /data2/david.ellis/public/HCPA/fpr
+  mask_path: null
+  subjects_glob: sub-*
+
+smoothing:
+  fwhm_values: [3, 6, 9, 12]
+
+designs:
+  n_designs_per_run: 25
+  events_per_minute: 1.5
+  min_duration: 1.0
+  max_duration: 3.0
+  seed: 1337
+  jitter_range_sec: [0.0, 2.0]
+
+glm:
+  hrf_model: glover
+  drift_model: cosine
+  high_pass: 0.008
+  oversampling: 50
+
+group:
+  group_size: 20
+  n_groups: 500
+  cluster_forming_ps: [0.01, 0.001]
+  cluster_fwer: 0.05
+  n_perm: 500
+  two_sided: true
+  seed: 2025
+
+feat:
+  fsf_template: /data2/david.ellis/public/HCPA/code/fsl/template.fsf
+  container: /data2/david.ellis/public/HCPA/code/tractography/fslantsnipype.sif
+  smoothing_fwhm: 0
+  log_dir: /data2/david.ellis/public/HCPA/cache/fsl/logs
