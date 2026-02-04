@@ -562,6 +562,8 @@ def plot_multiple_stat_maps(
     stat_map_cmap="hot",
     stat_map_alpha=0.9,
     stat_map_threshold=3.1,
+    # New optional argument: per-map thresholds (list-like matching stat_map_fnames).
+    stat_map_thresholds=None,
     mri_alpha=0.9,
     surface_alpha=0.9,
     stat_map_interpolation="nearest",
@@ -638,6 +640,15 @@ def plot_multiple_stat_maps(
             crop_bounds = None
             if crop_bounds_by_slice is not None:
                 crop_bounds = crop_bounds_by_slice.get(int(sl))
+            # Determine per-map threshold: prefer stat_map_thresholds list if provided,
+            # otherwise fall back to the single stat_map_threshold value for backward
+            # compatibility.
+            this_map_threshold = (
+                stat_map_thresholds[i]
+                if stat_map_thresholds is not None
+                else stat_map_threshold
+            )
+
             plot_mri_with_contours(
                 mri_fname=mri_fname,
                 surfaces=surfaces,
@@ -648,7 +659,7 @@ def plot_multiple_stat_maps(
                 slices_as_subplots=False,
                 stat_map_cmap=stat_map_cmap,
                 stat_map_alpha=stat_map_alpha,
-                stat_map_threshold=stat_map_threshold,
+                stat_map_threshold=this_map_threshold,
                 mri_alpha=mri_alpha,
                 surface_alpha=surface_alpha,
                 stat_map_interpolation=stat_map_interpolation,
