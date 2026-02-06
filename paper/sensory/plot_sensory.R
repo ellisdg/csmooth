@@ -21,13 +21,14 @@ suppressPackageStartupMessages({
   library(purrr)
   library(tibble)
   library(RColorBrewer)  # added for brewer.pal used in forest plots
+  library(patchwork)
 })
 
 #---------------------------------------------------------------------
 # I/O (adjust these paths if your data/figure folders differ)
 #---------------------------------------------------------------------
-input_csv <- "/Users/david.ellis/Box Sync/Aizenberg_Documents/Papers/csmooth/results/fsl_stats_task-lefthand.csv"
-out_dir   <- "/Users/david.ellis/Box Sync/Aizenberg_Documents/Papers/csmooth/figures"
+input_csv <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/results/fsl_stats_task-lefthand.csv"
+out_dir   <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures"
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 #---------------------------------------------------------------------
@@ -322,3 +323,7 @@ ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot.pdf"),
        plot = p_forest, width = 6, height = 4)
 ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_forest_plot.pdf"),
        plot = p_forest_intercept, width = 6, height = 4)
+# Combined plot of slopes and intercepts (side-by-side, shared legend)
+ggsave(filename = file.path(out_dir, "sensory_combined_forest_plots.pdf"),
+       plot = p_forest / p_forest_intercept + plot_layout(ncol = 2, guides = "collect"),
+       width = 12, height = 4)

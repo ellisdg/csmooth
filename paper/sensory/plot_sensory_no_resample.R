@@ -28,8 +28,8 @@ suppressPackageStartupMessages({
 #---------------------------------------------------------------------
 # I/O (adjust these paths if your data/figure folders differ)
 #---------------------------------------------------------------------
-input_csv <- "/Users/david.ellis/Box Sync/Aizenberg_Documents/Papers/csmooth/results/fsl_stats_task-lefthand.csv"
-out_dir   <- "/Users/david.ellis/Box Sync/Aizenberg_Documents/Papers/csmooth/figures/no_resample"
+input_csv <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/results/fsl_stats_task-lefthand.csv"
+out_dir   <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures/no_resample"
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 #---------------------------------------------------------------------
@@ -136,6 +136,58 @@ write.csv(summary_tbl,
 
 # Print to console for quick inspection
 print(summary_tbl)
+
+#---------------------------------------------------------------------
+# Active voxels by region, method, and FWHM (boxplots)
+# - includes optional no-smoothing baseline (method coded as none/raw/nosmooth)
+# - keeps WM/GM/RH Precentral/RH Postcentral and FWHM 3/6/9/12 (baseline shown as 0)
+#---------------------------------------------------------------------
+plot_fwhm_values <- c(3, 6, 9, 12)
+method_display_map <- c(
+  "gaussian" = "Gaussian",
+  "constrained" = "Constrained",
+  "constrained_nr" = "Constrained-NoResample",
+  "none" = "No Smoothing",
+  "no_smoothing" = "No Smoothing",
+  "nosmooth" = "No Smoothing",
+  "raw" = "No Smoothing"
+)
+
+active_plot_df <- df %>%
+  mutate(
+    method_chr = tolower(as.character(method)),
+    method_display = recode(method_chr, !!!method_display_map, .default = method_chr),
+    method_display = factor(method_display, levels = c("No Smoothing", "Gaussian", "Constrained", "Constrained-NoResample")),
+    fwhm_plot = if_else(method_display == "No Smoothing", 0, fwhm),
+    # override legend label to No Smoothing whenever FWHM is 0, regardless of method
+    method_display_plot = if_else(fwhm_plot == 0, "No Smoothing", as.character(method_display)),
+    method_display_plot = factor(method_display_plot, levels = c("No Smoothing", "Gaussian", "Constrained", "Constrained-NoResample"))
+  ) %>%
+  filter(region %in% rois, fwhm_plot %in% c(0, plot_fwhm_values)) %>%
+  drop_na(method_display_plot, fwhm_plot, n_active)
+
+if (nrow(active_plot_df) == 0) {
+  warning("No data available for active-voxel plot after filtering for expected methods/FWHM.")
+}
+
+p_active <- ggplot(active_plot_df, aes(x = factor(fwhm_plot), y = n_active, fill = method_display_plot)) +
+  geom_boxplot(position = position_dodge(width = 0.8), width = 0.7, outlier.size = 0.8) +
+  facet_wrap(~ region, scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = c(
+    "No Smoothing" = "gray80",
+    "Gaussian" = brewer.pal(3, "Set1")[2],
+    "Constrained" = brewer.pal(3, "Set1")[3],
+    "Constrained-NoResample" = brewer.pal(3, "Set1")[1]
+  ), drop = FALSE, name = "Method") +
+  scale_x_discrete(limits = c("0", "3", "6", "9", "12")) +
+  labs(x = "FWHM (mm)", y = "Number of active voxels") +
+  theme_minimal(base_size = 12)
+
+ggsave(filename = file.path(out_dir, "sensory_active_voxels_by_method_fwhm.png"),
+       plot = p_active, width = 8, height = 6, dpi = 300)
+
+ggsave(filename = file.path(out_dir, "sensory_active_voxels_by_method_fwhm.pdf"),
+       plot = p_active, width = 8, height = 6)
 
 #---------------------------------------------------------------------
 # Negative-binomial GLMM per ROI (counts only)
@@ -363,9 +415,9 @@ p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape 
 #---------------------------------------------------------------------
 intercept_df <- glmm_results %>%
   select(region,
-         Gaussian_intercept = gaussian_intercept, Gaussian_lwr = gaussian_intercept_lwr, Gaussian_upr = gaussian_intercept_upr,
-         Constrained_intercept = constrained_intercept, Constrained_lwr = constrained_intercept_lwr, Constrained_upr = constrained_intercept_upr,
-         ConstrainedNR_intercept = constrained_nr_intercept, ConstrainedNR_lwr = constrained_nr_intercept_lwr, ConstrainedNR_upr = constrained_nr_intercept_upr) %>%
+         Gaussian_intercept = gaussian_intercept, Gaussian_lwr = gaussian_intercept_lwr, Gaussian_upr = gaussian_upr,
+         Constrained_intercept = constrained_intercept, Constrained_lwr = constrained_intercept_lwr, Constrained_upr = constrained_upr,
+         ConstrainedNR_intercept = constrained_nr_intercept, ConstrainedNR_lwr = constrained_nr_intercept_lwr, ConstrainedNR_upr = constrained_nr_upr) %>%
   pivot_longer(cols = -region,
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained|ConstrainedNR)_(.*)") %>%
