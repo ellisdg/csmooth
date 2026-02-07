@@ -4,9 +4,9 @@ import os
 import re
 import shutil
 import subprocess
-import yaml
 from typing import Optional
 
+from .paths import load_config, PACKAGE_ROOT, DEFAULT_CONFIG_PATH
 
 PLACEHOLDERS = {
     "fmri_filename": "fmri_filename",
@@ -14,11 +14,6 @@ PLACEHOLDERS = {
     "smoothing_fwhm": "smoothing_fwhm",
     "events_txt": "events_txt",
 }
-
-
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def parse_run_info(path: str) -> dict:
@@ -91,24 +86,25 @@ def run_feat(fsf_path: str, container: str, log_dir: Optional[str], dry_run: boo
     subprocess.run(cmd, check=True)
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Generate and run FEAT first-level models for null designs.")
-    parser.add_argument("--config", required=True, help="Path to fpr_config.yaml")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to fpr_config.yaml")
     parser.add_argument("--method", choices=["csmooth", "gaussian"], required=True)
     parser.add_argument("--fwhm", type=int, required=True)
     parser.add_argument("--design-id", type=int, help="Restrict to a single design id")
     parser.add_argument("--subjects", nargs="*", help="Optional subject filter (e.g., sub-001)")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing FEAT outputs")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running FEAT")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     config = load_config(args.config)
     template_path = config["feat"]["fsf_template"]
     container = config["feat"]["container"]
     smoothing = config["feat"].get("smoothing_fwhm", 0)
     log_dir = config["feat"].get("log_dir")
-    design_root = os.path.join(config["paths"]["output_root"], "designs")
-    output_root = os.path.join(config["paths"]["output_root"], "feat", args.method, f"fwhm-{args.fwhm}")
+    output_base = config["paths"]["output_root"] or str(PACKAGE_ROOT / "output")
+    design_root = os.path.join(output_base, "designs")
+    output_root = os.path.join(output_base, "feat", args.method, f"fwhm-{args.fwhm}")
 
     template_text = read_template(template_path)
     subjects_filter = set(args.subjects) if args.subjects else None

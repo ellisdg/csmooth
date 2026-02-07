@@ -2,10 +2,10 @@ import argparse
 import os
 import subprocess
 import sys
-import yaml
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
+from .paths import load_config, script_path, DEFAULT_CONFIG_PATH, PACKAGE_ROOT
 
 
 def run_cmd(cmd, dry_run=False):
@@ -16,14 +16,14 @@ def run_cmd(cmd, dry_run=False):
 
 
 def ensure_designs(config_path: str, dry_run: bool):
-    cmd = ["python", "paper/hcpa/fpr/generate_null_designs.py", "--config", config_path]
+    cmd = [sys.executable, str(script_path("generate_null_designs")), "--config", config_path]
     run_cmd(cmd, dry_run=dry_run)
 
 
 def run_feat_batch(config_path: str, method: str, fwhm: int, dry_run: bool):
     cmd = [
-        "python",
-        "paper/hcpa/fpr/run_feat_null_firstlevel.py",
+        sys.executable,
+        str(script_path("run_feat_null_firstlevel")),
         "--config",
         config_path,
         "--method",
@@ -38,8 +38,8 @@ def run_feat_batch(config_path: str, method: str, fwhm: int, dry_run: bool):
 
 def analyze_batch(config_path: str, method: str, fwhm: int):
     cmd = [
-        "python",
-        "paper/hcpa/fpr/analyze_feat_null_results.py",
+        sys.executable,
+        str(script_path("analyze_feat_null_results")),
         "--config",
         config_path,
         "--method",
@@ -100,22 +100,21 @@ def aggregate_results(output_root: str, methods: list[str], fwhms: list[int], ou
     print(f"Saved plot {out_png}")
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Run full individual FPR pipeline (designs -> FEAT -> summary -> plot)")
-    parser.add_argument("--config", required=True, help="Path to fpr_config.yaml")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to fpr_config.yaml")
     parser.add_argument("--methods", nargs="*", default=["csmooth", "gaussian"], help="Methods to process")
     parser.add_argument("--fwhm", nargs="*", type=int, help="FWHM list (defaults to config values)")
     parser.add_argument("--skip-designs", action="store_true", help="Skip design generation step")
     parser.add_argument("--skip-feat", action="store_true", help="Skip FEAT runs (assumes outputs exist)")
     parser.add_argument("--skip-analyze", action="store_true", help="Skip zstat summarization (assumes summaries exist)")
     parser.add_argument("--feat-dry-run", action="store_true", help="Print FEAT commands without running")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     fwhms = args.fwhm or config["smoothing"].get("fwhm_values", [])
-    output_root = config["paths"]["output_root"]
+    output_root = config["paths"]["output_root"] or str(PACKAGE_ROOT / "output")
     cluster_ps = config["group"].get("cluster_forming_ps", [0.01, 0.001])
 
     if not args.skip_designs:

@@ -1,0 +1,5 @@
+# Minimal placeholder FSF template. Replace values as needed.
+fmri_filename
+output_directory
+smoothing_fwhm
+events_txt

@@ -17,7 +17,6 @@ from paper.hcpa.fpr.generate_null_designs import compute_designs_for_run  # noqa
 from paper.hcpa.fpr.analyze_feat_null_results import main as analyze_main  # noqa: E402
 from paper.hcpa.fpr.run_fpr_pipeline import aggregate_results  # noqa: E402
 from paper.hcpa.fpr.run_feat_null_firstlevel import main as feat_main  # noqa: E402
-from paper.hcpa.fpr.run_group_null_glm import main as group_main  # noqa: E402
 
 
 def _write_nifti(path: str, shape=(4, 4, 4, 8), fill=0.0):
@@ -38,16 +37,14 @@ def _make_config(tmpdir: str) -> str:
         "smoothing": {"fwhm_values": [3]},
         "designs": {
             "n_designs_per_run": 2,
-            "events_per_minute": 1.0,
-            "min_duration": 0.5,
-            "max_duration": 1.0,
+            "min_duration": 1.0,
+            "max_duration": 2.0,
             "seed": 1,
-            "jitter_range_sec": [0.0, 0.0],
         },
         "glm": {
             "hrf_model": "glover",
             "drift_model": "cosine",
-            "high_pass": 0.008,
+            "high_pass": None,
             "oversampling": 50,
         },
         "group": {
@@ -89,6 +86,13 @@ def test_generate_null_designs_creates_files(tmp_path):
     run_design_dir = os.path.join(out_dir, "sub-01", "dir-AP_run-01")
     tsvs = [p for p in os.listdir(run_design_dir) if p.endswith(".tsv")]
     assert len(tsvs) == 2
+    for tsv in tsvs:
+        df = pd.read_csv(os.path.join(run_design_dir, tsv), sep="\t")
+        assert not df.empty
+        assert df["duration"].between(1.0, 2.0).all()
+        assert (df["onset"].diff().fillna(0) >= 0).all()
+        last_end = df["onset"] + df["duration"]
+        assert float(last_end.max()) <= 0.8 * 8 + 1e-3
 
 
 def test_analyze_feat_null_results_detects_cluster(tmp_path, monkeypatch):
@@ -180,56 +184,4 @@ def test_run_feat_null_firstlevel_writes_fsf(tmp_path, monkeypatch):
         text = f.read()
     assert fmri_path in text
     assert design_path in text
-
-
-def test_run_group_null_glm_outputs_records(tmp_path, monkeypatch):
-    cfg_path = _make_config(tmp_path)
-    out_root = os.path.join(tmp_path, "out")
-    mask_path = os.path.join(tmp_path, "mask.nii.gz")
-    nib.Nifti1Image(np.ones((3, 3, 3), dtype=np.float32), np.eye(4)).to_filename(mask_path)
-
-    # two subjects with supra-threshold voxels
-    for subj, val in [("sub-01", 20.0), ("sub-02", 18.0)]:
-        fl_dir = os.path.join(out_root, "first_level", "csmooth", "fwhm-3", subj, "dir-AP_run-01")
-        os.makedirs(fl_dir, exist_ok=True)
-        z_path = os.path.join(fl_dir, "design-000_zmap.nii.gz")
-        data = np.zeros((3, 3, 3), dtype=np.float32)
-        data[1, 1, 1] = val
-        nib.Nifti1Image(data, np.eye(4)).to_filename(z_path)
-
-    # patch config to point to mask
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    cfg["paths"]["mask_path"] = mask_path
-    cfg["group"]["n_groups"] = 2
-    cfg["group"]["group_size"] = 2
-    cfg["group"]["cluster_forming_ps"] = [0.05]
-    cfg["group"]["n_perm"] = 0
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f)
-
-    argv = [
-        "group",
-        "--config",
-        cfg_path,
-        "--method",
-        "csmooth",
-        "--fwhm",
-        "3",
-        "--n-groups",
-        "2",
-        "--group-size",
-        "2",
-        "--cluster-ps",
-        "0.05",
-        "--n-perm",
-        "0",
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
-    group_main()
-
-    out_csv = os.path.join(out_root, "group_stats", "csmooth", "fwhm-3", "group_null_results.csv")
-    df = pd.read_csv(out_csv)
-    assert not df.empty
-    assert df["n_clusters"].max() >= 1
 

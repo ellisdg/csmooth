@@ -2,17 +2,12 @@ import argparse
 import glob
 import os
 import re
-import yaml
 import numpy as np
 import pandas as pd
 import nibabel as nib
 from tqdm import tqdm
 from scipy import ndimage, stats
-
-
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+from .paths import load_config, PACKAGE_ROOT, DEFAULT_CONFIG_PATH
 
 
 def build_mask(mask_path: str | None, sample_img: str) -> np.ndarray:
@@ -61,17 +56,17 @@ def compute_clusters(z_img: str, mask: np.ndarray, cluster_ps: list[float], two_
     return results
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Summarize individual FEAT null runs for FPR estimation.")
-    parser.add_argument("--config", required=True, help="Path to fpr_config.yaml")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to fpr_config.yaml")
     parser.add_argument("--method", choices=["csmooth", "gaussian"], required=True)
     parser.add_argument("--fwhm", type=int, required=True)
     parser.add_argument("--mask", help="Optional mask override")
     parser.add_argument("--output", help="Optional CSV output path")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    output_root = config["paths"]["output_root"]
+    output_root = config["paths"]["output_root"] or str(PACKAGE_ROOT / "output")
     cluster_ps = config["group"].get("cluster_forming_ps", [0.01, 0.001])
     two_sided = bool(config["group"].get("two_sided", True))
 
