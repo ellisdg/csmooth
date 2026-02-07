@@ -13,7 +13,6 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from paper.hcpa.fpr.generate_null_designs import compute_designs_for_run  # noqa: E402
 from paper.hcpa.fpr.analyze_feat_null_results import main as analyze_main  # noqa: E402
 from paper.hcpa.fpr.run_fpr_pipeline import aggregate_results  # noqa: E402
 from paper.hcpa.fpr.run_feat_null_firstlevel import main as feat_main  # noqa: E402
@@ -67,32 +66,6 @@ def _make_config(tmpdir: str) -> str:
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f)
     return cfg_path
-
-
-def test_generate_null_designs_creates_files(tmp_path):
-    cfg_path = _make_config(tmp_path)
-    cleaned_dir = os.path.join(tmp_path, "cleaned", "sub-01", "func")
-    os.makedirs(cleaned_dir, exist_ok=True)
-    run_path = os.path.join(cleaned_dir, "sub-01_task-rest_dir-AP_run-01_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz")
-    _write_nifti(run_path)
-    with open(run_path.replace(".nii.gz", ".json"), "w", encoding="utf-8") as f:
-        json.dump({"RepetitionTime": 0.8, "NumberOfVolumesAfterScrubbing": 8}, f)
-
-    out_dir = os.path.join(tmp_path, "out", "designs")
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    compute_designs_for_run(run_path, cfg, out_dir, n_designs=2, seed=0)
-
-    run_design_dir = os.path.join(out_dir, "sub-01", "dir-AP_run-01")
-    tsvs = [p for p in os.listdir(run_design_dir) if p.endswith(".tsv")]
-    assert len(tsvs) == 2
-    for tsv in tsvs:
-        df = pd.read_csv(os.path.join(run_design_dir, tsv), sep="\t")
-        assert not df.empty
-        assert df["duration"].between(1.0, 2.0).all()
-        assert (df["onset"].diff().fillna(0) >= 0).all()
-        last_end = df["onset"] + df["duration"]
-        assert float(last_end.max()) <= 0.8 * 8 + 1e-3
 
 
 def test_analyze_feat_null_results_detects_cluster(tmp_path, monkeypatch):

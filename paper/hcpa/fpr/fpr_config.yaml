@@ -33,5 +33,4 @@ group:
 feat:
   fsf_template: /data2/david.ellis/public/HCPA/code/fpr/template.fsf
   container: /data2/david.ellis/public/HCPA/code/tractography/fslantsnipype.sif
-  smoothing_fwhm: 0
   log_dir: /data2/david.ellis/public/HCPA/cache/fpr/logs
