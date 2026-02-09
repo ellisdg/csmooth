@@ -1,11 +1,64 @@
+from __future__ import annotations
+
 import argparse
 import glob
 import os
 import subprocess
+import sys
+from pathlib import Path
 from typing import Iterable, List
+import re
+import json
+import yaml
 
-from .paths import DEFAULT_CONFIG_PATH, load_config, PACKAGE_ROOT
-from .run_feat_null_firstlevel import parse_fmri_metadata, feat_output_exists
+# Embed minimal config loader so this script can run standalone (copied from paths.py)
+PACKAGE_ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = PACKAGE_ROOT / "fpr_config.yaml"
+
+
+def resolve_rel_path(value: str | None, base_dir: Path) -> str | None:
+    if value is None:
+        return None
+    path = Path(value)
+    return str(path if path.is_absolute() else (base_dir / path).resolve())
+
+
+def load_config(config_path: str | Path | None = None) -> dict:
+    cfg_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    base_dir = cfg_path.parent
+    paths = cfg.get("paths", {})
+    resolved_paths = {}
+    for key, val in paths.items():
+        if isinstance(val, str) and key != "subjects_glob":
+            resolved_paths[key] = resolve_rel_path(val, base_dir)
+        else:
+            resolved_paths[key] = val
+    cfg["paths"] = resolved_paths
+    cfg["_config_path"] = str(cfg_path)
+    cfg["_base_dir"] = str(base_dir)
+    return cfg
+
+
+def parse_fmri_metadata(path: str) -> dict:
+    """Extract subject, dir, run, method, fwhm from a smoothed filename.
+
+    Example basename:
+    sub-HCA6010538_task-rest_dir-AP_run-1_space-MNI152NLin2009cAsym_desc-csmooth_fwhm-6_bold.nii.gz
+    """
+    basename = os.path.basename(path)
+    pattern = re.compile(
+        r"(?P<subject>sub-[^_]+)_task-rest_dir-(?P<dir>[^_]+)_run-(?P<run>[^_]+)_.*desc-(?P<method>[^_]+)_fwhm-(?P<fwhm>[0-9]+(?:\\.[0-9]+)?)"
+    )
+    m = pattern.search(basename)
+    if not m:
+        raise ValueError(f"Cannot parse run info from {basename}")
+    return m.groupdict()
+
+
+def feat_output_exists(feat_dir: str) -> bool:
+    return os.path.exists(os.path.join(feat_dir, "stats", "zstat1.nii.gz"))
 
 
 def discover_runs(base_dir: str, method: str, fwhms: Iterable[str], subjects_glob: str) -> List[str]:
@@ -21,7 +74,7 @@ def discover_runs(base_dir: str, method: str, fwhms: Iterable[str], subjects_glo
     return sorted(set(runs))
 
 
-def build_feat_dir(output_base: str, info: dict ) -> str | None:
+def build_feat_dir(output_base: str, info: dict) -> str | None:
     return os.path.join(
         output_base,
         "feat",
@@ -29,7 +82,7 @@ def build_feat_dir(output_base: str, info: dict ) -> str | None:
         f"fwhm-{info['fwhm']}",
         "fsl",
         info["subject"],
-        f"dir-{info['dir']}_run-{info['run']}.feat"
+        f"dir-{info['dir']}_run-{info['run']}.feat",
     )
 
 
@@ -42,8 +95,6 @@ def submit_job(sbatch_script: str, fmri_path: str, args: argparse.Namespace) -> 
         "--fmri-filename",
         fmri_path,
     ]
-    if args.design_id is not None:
-        cmd.extend(["--design-id", f"{args.design_id}"])
     if args.overwrite:
         cmd.append("--overwrite")
     if args.dry_run:
@@ -59,7 +110,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--fwhm", nargs="*", help="Optional list of FWHM values to include")
     parser.add_argument("--subjects", nargs="*", help="Optional subject filter (e.g., sub-001)")
     parser.add_argument("--overwrite", action="store_true", help="Submit even if outputs exist")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip submission when output feat exists for the selected design")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip submission when output feat exists")
     parser.add_argument("--sbatch-script", help="Path to sbatch wrapper script")
     parser.add_argument("--dry-run", action="store_true", help="Print sbatch commands without submitting")
     args = parser.parse_args(argv)
