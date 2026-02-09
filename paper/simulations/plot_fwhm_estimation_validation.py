@@ -97,7 +97,7 @@ def plot_gm(df_gm: pd.DataFrame, out_path: Path | None = None, show: bool = Fals
         ymax = 13
     ax.set_ylim(0, ymax)
 
-    ax.set_xlabel("Target FWHM")
+    ax.set_xlabel("Applied FWHM")
     ax.set_ylabel("Estimated FWHM (GM)")
     ax.set_title("FWHM estimation validation (GM only)")
     ax.legend()
