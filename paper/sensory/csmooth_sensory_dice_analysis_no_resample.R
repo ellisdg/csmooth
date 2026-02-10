@@ -62,6 +62,7 @@ fit_model <- function(data) {
     val_col   <- dplyr::case_when("emmean" %in% names(df) ~ "emmean",
                                   "emtrend" %in% names(df) ~ "emtrend",
                                   "estimate" %in% names(df) ~ "estimate",
+                                  "FWHM.trend" %in% names(df) ~ "FWHM.trend",
                                   TRUE ~ NA_character_)
     lower_col <- if ("lower.CL" %in% names(df)) "lower.CL" else if ("asymp.LCL" %in% names(df)) "asymp.LCL" else NA_character_
     upper_col <- if ("upper.CL" %in% names(df)) "upper.CL" else if ("asymp.UCL" %in% names(df)) "asymp.UCL" else NA_character_
@@ -189,14 +190,17 @@ plot_df <- tibble(
 param_colors <- c("Gaussian" = brewer.pal(3, "Set1")[2],
                   "Constrained-NR" = brewer.pal(3, "Set1")[3],
                   "Constrained-RS" = brewer.pal(3, "Set1")[1])
+param_shapes <- c("Gaussian" = 16, "Constrained-NR" = 17, "Constrained-RS" = 15)
+param_pd <- position_dodge(width = 0.5)
 
-p_params <- ggplot(plot_df, aes(x = method, y = est, color = method)) +
-  geom_point(position = position_dodge(width = 0.5), size = 3) +
+p_params <- ggplot(plot_df, aes(x = method, y = est, color = method, shape = method)) +
   geom_errorbar(aes(ymin = lwr, ymax = upr),
-                position = position_dodge(width = 0.5),
+                position = param_pd,
                 width = 0.15, size = 0.8) +
+  geom_point(position = param_pd, size = 3) +
   facet_wrap(~ parameter, scales = "free_y") +
   scale_color_manual(values = param_colors) +
+  scale_shape_manual(values = param_shapes) +
   labs(x = NULL, y = "Estimate (95% CI)") +
   theme_minimal(base_size = 12) +
   theme(strip.text = element_text(face = "bold"),

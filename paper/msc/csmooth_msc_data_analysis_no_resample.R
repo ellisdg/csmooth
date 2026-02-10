@@ -212,6 +212,19 @@ create_motor_plot_with_stats <- function(data) {
                       levels = c("dice",  "pearson_r", "mae"),
                       labels = c("Dice Coefficient", "Correlation", "Mean Absolute Error"))
     )
+  # map to display labels used in plots
+  display_data <- plot_data %>%
+    mutate(
+      display_method = case_when(
+        method == "no smoothing" ~ "no smoothing",
+        method == "gaussian" ~ "Gaussian",
+        method == "constrained_no_resample" ~ "Constrained-NR",
+        method == "constrained" ~ "Constrained-RS",
+        TRUE ~ as.character(method)
+      ),
+      display_method = factor(display_method,
+                              levels = c("no smoothing", "Gaussian", "Constrained-NR", "Constrained-RS"))
+    )
 
   # Prepare stat results for plotting
   stat_plot_data <- stat_results %>%
@@ -250,26 +263,21 @@ create_motor_plot_with_stats <- function(data) {
 
   # 2) THE FINAL PLOT ------------------------------------------------------
 
-  p <- ggplot(plot_data,
+  combined_fill <- c(
+    "no smoothing"   = "gray80",
+    "Gaussian"       = brewer.pal(3, "Set1")[2],
+    "Constrained-NR" = brewer.pal(3, "Set1")[3],
+    "Constrained-RS" = brewer.pal(3, "Set1")[1]
+  )
+
+  p_combined <- ggplot(display_data,
          aes(x = factor(fwhm),
              y = value,
-             fill = method)) +
-    
-    # box plots
+             fill = display_method)) +
     geom_boxplot(position = position_dodge(width = 0.8),
                  width = 0.7) +
-    
-    # Create subplots
     facet_wrap(~ metric, scales = "free_y", ncol = 3) +
-    
-    # force "no smoothing" = gray, + colors from Set1 (include constrained_no_resample)
-    scale_fill_manual(values = c(
-      "no smoothing" = "gray80",
-      "gaussian"     = brewer.pal(5, "Set1")[2],
-      "constrained"  = brewer.pal(5, "Set1")[3],
-      "constrained_no_resample" = brewer.pal(5, "Set1")[4]
-    )) +
-    
+    scale_fill_manual(values = combined_fill) +
     labs(
       x = "FWHM (mm)",
       y = "",
@@ -281,36 +289,51 @@ create_motor_plot_with_stats <- function(data) {
       axis.text.x = element_text(angle = 0, hjust = 0.5)
     )
 
-  # Add significance annotations
-#  if (nrow(stat_plot_data) > 0) {
-#    p <- p + 
-#      geom_text(data = stat_plot_data,
-#                aes(x = factor(fwhm), y = y_pos, label = p.adj.signif),
-#                inherit.aes = FALSE,
-#                size = 3, vjust = 0.5)
-#  }
+  # No-resample-only plot (drop RS, relabel NR already mapped)
+  nr_only_data <- display_data %>% filter(display_method != "Constrained-RS") %>%
+    mutate(display_method = factor(display_method, levels = c("no smoothing", "Gaussian", "Constrained-NR")))
 
-  return(p)
+  p_nr_only <- ggplot(nr_only_data,
+         aes(x = factor(fwhm),
+             y = value,
+             fill = display_method)) +
+    geom_boxplot(position = position_dodge(width = 0.8),
+                 width = 0.7) +
+    facet_wrap(~ metric, scales = "free_y", ncol = 3) +
+    scale_fill_manual(values = combined_fill[c("no smoothing", "Gaussian", "Constrained-NR")]) +
+    labs(
+      x = "FWHM (mm)",
+      y = "",
+      fill = "Smoothing Method"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(size = 12, face = "bold"),
+      axis.text.x = element_text(angle = 0, hjust = 0.5)
+    )
+
+  list(combined = p_combined, nr_only = p_nr_only)
 }
 
-plot_motor <- create_motor_plot_with_stats(motor_stats_df)
+plot_motor_list <- create_motor_plot_with_stats(motor_stats_df)
+plot_motor <- plot_motor_list$combined
+plot_motor_nr <- plot_motor_list$nr_only
 print(plot_motor)
+print(plot_motor_nr)
 
 # save to file
-ggsave("/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures/msc_motor_activation_accuracy_by_smoothing_method_no_resample.pdf", width = 10, height = 4)
+combined_out <- "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/msc_accuracy/msc_motor_activation_accuracy_by_smoothing_method_no_resample.pdf"
+nr_only_out <- "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/msc_accuracy/msc_motor_activation_accuracy_by_smoothing_method_no_resample_only.pdf"
 
-#plot_motor_single_run <- create_motor_plot_with_stats(motor_stats_single_run_df)
-#print(plot_motor_single_run)
-# save to file
-#ggsave("/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures/msc_motor_activation_accuracy_by_smoothing_method_single_run.png", width = 10, height = 4, dpi = 300)
-#ggsave("/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures/msc_motor_activation_accuracy_by_smoothing_method_single_run.pdf", width = 10, height = 4)
+ggsave(combined_out, plot = plot_motor, width = 10, height = 4)
+ggsave(nr_only_out, plot = plot_motor_nr, width = 10, height = 4)
 
 # Print statistical results
 cat("Statistical Test Results:\n")
 stat_results_main <- perform_pairwise_tests(motor_stats_df)
 print(stat_results_main)
 # save to csv
-write.csv(stat_results_main, "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/results/msc_motor_stats_pairwise_tests_no_resample.csv", row.names = FALSE)
+write.csv(stat_results_main, "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/msc_accuracy/msc_motor_stats_pairwise_tests_no_resample.csv", row.names = FALSE)
 
 #cat("\nSingle Run Statistical Test Results:\n")
 #stat_results_single <- perform_pairwise_tests(motor_stats_single_run_df)

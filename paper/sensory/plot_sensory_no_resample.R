@@ -29,8 +29,13 @@ suppressPackageStartupMessages({
 # I/O (adjust these paths if your data/figure folders differ)
 #---------------------------------------------------------------------
 input_csv <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/results/fsl_stats_task-lefthand.csv"
-out_dir   <- "/Users/david.ellis/Library/CloudStorage/Box-Box/Aizenberg_Documents/Papers/csmooth/figures/no_resample"
+out_dir   <- "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/sensory_reliability"
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+# subfolders for combined and no-resample-only outputs
+combined_dir <- file.path(out_dir, "combined")
+nr_only_dir  <- file.path(out_dir, "no_resample_only")
+dir.create(combined_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(nr_only_dir,  showWarnings = FALSE, recursive = TRUE)
 
 #---------------------------------------------------------------------
 # Load and prepare data
@@ -165,9 +170,8 @@ print(summary_tbl)
 plot_fwhm_values <- c(3, 6, 9, 12)
 method_display_map <- c(
   "gaussian" = "Gaussian",
-  "constrained" = "Constrained",
-  # rename the no-resample variant back to the simpler label
-  "constrained_nr" = "Constrained",
+  "constrained" = "Constrained-RS",
+  "constrained_nr" = "Constrained-NR",
   "none" = "No Smoothing",
   "no_smoothing" = "No Smoothing",
   "nosmooth" = "No Smoothing",
@@ -178,40 +182,45 @@ active_plot_df <- df %>%
   mutate(
     method_chr = tolower(as.character(method)),
     method_display = recode(method_chr, !!!method_display_map, .default = method_chr),
-    # use the simpler 'Constrained' label for the no-resample variant; drop the resampling 'constrained' method by checking the raw code
-    method_display = factor(method_display, levels = c("No Smoothing", "Gaussian", "Constrained")),
+    method_display = factor(method_display, levels = c("No Smoothing", "Gaussian", "Constrained-NR", "Constrained-RS")),
     fwhm_plot = if_else(method_display == "No Smoothing", 0, fwhm),
-    # override legend label to No Smoothing whenever FWHM is 0, regardless of method
     method_display_plot = if_else(fwhm_plot == 0, "No Smoothing", as.character(method_display)),
-    method_display_plot = factor(method_display_plot, levels = c("No Smoothing", "Gaussian", "Constrained"))
+    method_display_plot = factor(method_display_plot, levels = c("No Smoothing", "Gaussian", "Constrained-NR", "Constrained-RS"))
   ) %>%
   filter(region %in% rois, fwhm_plot %in% c(0, plot_fwhm_values)) %>%
-  # explicitly remove rows corresponding to the regular (resampling) constrained method by inspecting the original method code
-  filter(method_chr != "constrained") %>%
   drop_na(method_display_plot, fwhm_plot, n_active)
 
 if (nrow(active_plot_df) == 0) {
   warning("No data available for active-voxel plot after filtering for expected methods/FWHM.")
 }
 
-p_active <- ggplot(active_plot_df, aes(x = factor(fwhm_plot), y = n_active, fill = method_display_plot)) +
+combined_fill <- c(
+  "No Smoothing"   = "gray80",
+  "Gaussian"       = brewer.pal(3, "Set1")[2],
+  "Constrained-NR" = brewer.pal(3, "Set1")[3],
+  "Constrained-RS" = brewer.pal(3, "Set1")[1]
+)
+
+p_active_combined <- ggplot(active_plot_df, aes(x = factor(fwhm_plot), y = n_active, fill = method_display_plot)) +
   geom_boxplot(position = position_dodge(width = 0.8), width = 0.7, outlier.size = 0.8) +
   facet_wrap(~ region, scales = "free_y", ncol = 2) +
-  scale_fill_manual(values = c(
-    "No Smoothing" = "gray80",
-    "Gaussian" = brewer.pal(3, "Set1")[2],
-    # use the original green for Constrained
-    "Constrained" = brewer.pal(3, "Set1")[3]
-  ), drop = FALSE, name = "Method") +
+  scale_fill_manual(values = combined_fill, drop = FALSE, name = "Method") +
   scale_x_discrete(limits = c("0", "3", "6", "9", "12")) +
   labs(x = "FWHM (mm)", y = "Number of active voxels") +
   theme_minimal(base_size = 12)
 
-ggsave(filename = file.path(out_dir, "sensory_active_voxels_by_method_fwhm.png"),
-       plot = p_active, width = 8, height = 6, dpi = 300)
+# NR-only version (drop Constrained-RS)
+active_plot_nr_df <- active_plot_df %>%
+  filter(method_display_plot != "Constrained-RS") %>%
+  mutate(method_display_plot = factor(method_display_plot, levels = c("No Smoothing", "Gaussian", "Constrained-NR")))
 
-ggsave(filename = file.path(out_dir, "sensory_active_voxels_by_method_fwhm_no_resample.pdf"),
-       plot = p_active, width = 8, height = 6)
+p_active_nr <- ggplot(active_plot_nr_df, aes(x = factor(fwhm_plot), y = n_active, fill = method_display_plot)) +
+  geom_boxplot(position = position_dodge(width = 0.8), width = 0.7, outlier.size = 0.8) +
+  facet_wrap(~ region, scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = combined_fill[c("No Smoothing", "Gaussian", "Constrained-NR")], drop = FALSE, name = "Method") +
+  scale_x_discrete(limits = c("0", "3", "6", "9", "12")) +
+  labs(x = "FWHM (mm)", y = "Number of active voxels") +
+  theme_minimal(base_size = 12)
 
 # ---------------------------------------------------------------------
 # Boxplots of proportions derived from per-scan counts:
@@ -251,51 +260,46 @@ prop_plot_df <- scan_wide %>%
          measure = factor(measure, levels = c("% active voxels in GM", "% active voxels in postcentral vs precentral"))) %>%
   drop_na(percent, method_display_plot, fwhm_plot)
 
-if (nrow(prop_plot_df) == 0) {
-  warning("No data available to plot the derived percent measures after filtering.")
-}
-
-p_prop <- ggplot(prop_plot_df, aes(x = factor(fwhm_plot), y = percent, fill = method_display_plot)) +
+p_prop_combined <- ggplot(prop_plot_df, aes(x = factor(fwhm_plot), y = percent, fill = method_display_plot)) +
   geom_boxplot(position = position_dodge(width = 0.8), width = 0.7, outlier.size = 0.8) +
   facet_wrap(~ measure, scales = "free_y", ncol = 2) +
-  scale_fill_manual(values = c(
-    "No Smoothing" = "gray80",
-    "Gaussian" = brewer.pal(3, "Set1")[2],
-    "Constrained" = brewer.pal(3, "Set1")[3]
-  ), drop = FALSE, name = "Method") +
+  scale_fill_manual(values = combined_fill, drop = FALSE, name = "Method") +
   scale_x_discrete(limits = c("0", "3", "6", "9", "12")) +
   labs(x = "FWHM (mm)", y = "Percent") +
   theme_minimal(base_size = 12)
 
-# Save derived-percent plots
-if (nrow(prop_plot_df) > 0) {
-  ggsave(filename = file.path(out_dir, "sensory_percent_derived_gm_postcentral_by_method_fwhm_no_resample.png"),
-         plot = p_prop, width = 8, height = 4, dpi = 300)
-  ggsave(filename = file.path(out_dir, "sensory_percent_derived_gm_postcentral_by_method_fwhm_no_resample.pdf"),
-         plot = p_prop, width = 8, height = 4)
-}
+prop_plot_nr_df <- prop_plot_df %>%
+  filter(method_display_plot != "Constrained-RS") %>%
+  mutate(method_display_plot = factor(method_display_plot, levels = c("No Smoothing", "Gaussian", "Constrained-NR")))
 
+p_prop_nr <- ggplot(prop_plot_nr_df, aes(x = factor(fwhm_plot), y = percent, fill = method_display_plot)) +
+  geom_boxplot(position = position_dodge(width = 0.8), width = 0.7, outlier.size = 0.8) +
+  facet_wrap(~ measure, scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = combined_fill[c("No Smoothing", "Gaussian", "Constrained-NR")], drop = FALSE, name = "Method") +
+  scale_x_discrete(limits = c("0", "3", "6", "9", "12")) +
+  labs(x = "FWHM (mm)", y = "Percent") +
+  theme_minimal(base_size = 12)
 
-# ---------------------------------------------------------------------
+#---------------------------------------------------------------------
 # Paired t-tests (Gaussian vs Constrained) per measure and FWHM
 # - pairs on subject + run within each fwhm_plot
 # ---------------------------------------------------------------------
 paired_ttest_by_fwhm <- prop_plot_df %>%
-  filter(method_display_plot %in% c("Gaussian", "Constrained")) %>%
+  filter(method_display_plot %in% c("Gaussian", "Constrained-NR")) %>%
   group_by(measure, fwhm_plot) %>%
   group_modify(~{
     wide <- .x %>%
       select(subject, run, method_display_plot, percent) %>%
       pivot_wider(names_from = method_display_plot, values_from = percent) %>%
-      drop_na(Gaussian, Constrained)
+      drop_na(Gaussian, `Constrained-NR`)
     if (nrow(wide) < 2) return(tibble())
-    tt <- try(stats::t.test(wide$Gaussian, wide$Constrained, paired = TRUE), silent = TRUE)
+    tt <- try(stats::t.test(wide$Gaussian, wide$`Constrained-NR`, paired = TRUE), silent = TRUE)
     if (inherits(tt, "try-error")) return(tibble())
     tibble(
       n_pairs = nrow(wide),
       mean_gaussian = mean(wide$Gaussian, na.rm = TRUE),
-      mean_constrained = mean(wide$Constrained, na.rm = TRUE),
-      diff_mean = mean(wide$Gaussian - wide$Constrained, na.rm = TRUE),
+      mean_constrained_nr = mean(wide$`Constrained-NR`, na.rm = TRUE),
+      diff_mean = mean(wide$Gaussian - wide$`Constrained-NR`, na.rm = TRUE),
       t_stat = unname(tt$statistic),
       df = unname(tt$parameter),
       p_value = tt$p.value
@@ -503,7 +507,7 @@ write.csv(diffs_tidy,
 # Forest plot: Gaussian vs Constrained smoothing slopes (per ROI)
 #---------------------------------------------------------------------
 pd <- position_dodge(width = 0.6)
-plot_df <- glmm_results %>%
+plot_df_combined <- glmm_results %>%
   select(region,
          Gaussian_slope = gaussian_slope, Gaussian_lwr = gaussian_lwr, Gaussian_upr = gaussian_upr,
          Constrained_slope = constrained_slope, Constrained_lwr = constrained_lwr, Constrained_upr = constrained_upr,
@@ -512,13 +516,29 @@ plot_df <- glmm_results %>%
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained|ConstrainedNR)_(.*)") %>%
   filter(region %in% rois) %>%
-  # drop the regular Constrained rows and rename the NR variant to the simple 'Constrained'
-  filter(method != "Constrained") %>%
-  mutate(method = recode(method, ConstrainedNR = "Constrained")) %>%
-  mutate(method = factor(method, levels = c("Gaussian", "Constrained"))) %>%
+  mutate(method = recode(method, Constrained = "Constrained-RS", ConstrainedNR = "Constrained-NR")) %>%
+  mutate(method = factor(method, levels = c("Gaussian", "Constrained-NR", "Constrained-RS"))) %>%
   arrange(region, method) %>%
   mutate(slope_rr = exp(slope), lwr_rr = exp(lwr), upr_rr = exp(upr)) %>%
   mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
+
+p_forest_combined <- ggplot(plot_df_combined, aes(x = slope_rr, y = region, color = method, shape = method, group = method)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(xmin = lwr_rr, xmax = upr_rr),
+                position = pd, width = 0.2) +
+  scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2],
+                                "Constrained-RS" = brewer.pal(3, "Set1")[1],
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Gaussian" = 16, "Constrained-RS" = 17, "Constrained-NR" = 15)) +
+  scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
+  labs(x = "Incidence Rate Ratio per 1 mm FWHM",
+       y = NULL, color = "Method", shape = "Method") +
+  theme_minimal(base_size = 12)
+
+plot_df <- plot_df_combined %>%
+  filter(method != "Constrained-RS") %>%
+  mutate(method = factor(method, levels = c("Gaussian", "Constrained-NR")))
 
 p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape = method, group = method)) +
   geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
@@ -526,10 +546,10 @@ p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape 
   geom_errorbar(aes(xmin = lwr_rr, xmax = upr_rr),
                 position = pd, width = 0.2) +
   scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2],
-                                "Constrained" = brewer.pal(3, "Set1")[3]),
-                     breaks = c("Gaussian", "Constrained")) +
-  scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
-                     breaks = c("Gaussian", "Constrained")) +
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3]),
+                     breaks = c("Gaussian", "Constrained-NR")) +
+  scale_shape_manual(values = c("Gaussian" = 16, "Constrained-NR" = 17),
+                     breaks = c("Gaussian", "Constrained-NR")) +
   scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
   labs(x = "Incidence Rate Ratio per 1 mm FWHM",
        y = NULL, color = "Method", shape = "Method") +
@@ -538,7 +558,7 @@ p_forest <- ggplot(plot_df, aes(x = slope_rr, y = region, color = method, shape 
 #---------------------------------------------------------------------
 # Forest plot for intercepts (constant terms)
 #---------------------------------------------------------------------
-intercept_df <- glmm_results %>%
+intercept_df_combined <- glmm_results %>%
   select(region,
          Gaussian_intercept = gaussian_intercept, Gaussian_lwr = gaussian_intercept_lwr, Gaussian_upr = gaussian_intercept_upr,
          Constrained_intercept = constrained_intercept, Constrained_lwr = constrained_intercept_lwr, Constrained_upr = constrained_intercept_upr,
@@ -547,34 +567,47 @@ intercept_df <- glmm_results %>%
                names_to = c("method", ".value"),
                names_pattern = "(Gaussian|Constrained|ConstrainedNR)_(.*)") %>%
   filter(region %in% rois) %>%
-  # drop the regular Constrained rows and rename the NR variant to the simple 'Constrained'
-  filter(method != "Constrained") %>%
-  rename(intercept = intercept) %>%
-  mutate(method = recode(method, ConstrainedNR = "Constrained")) %>%
-  mutate(method = factor(method, levels = c("Gaussian", "Constrained"))) %>%
+  mutate(method = recode(method, Constrained = "Constrained-RS", ConstrainedNR = "Constrained-NR")) %>%
+  mutate(method = factor(method, levels = c("Gaussian", "Constrained-NR", "Constrained-RS"))) %>%
   mutate(intercept_resp = exp(intercept), lwr_resp = exp(lwr), upr_resp = exp(upr)) %>%
   mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
+
+p_forest_intercept_combined <- ggplot(intercept_df_combined, aes(x = intercept_resp, y = region, color = method, shape = method, group = method)) +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(xmin = lwr_resp, xmax = upr_resp),
+                position = pd, width = 0.2) +
+  scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2],
+                                "Constrained-RS" = brewer.pal(3, "Set1")[1],
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Gaussian" = 16, "Constrained-RS" = 17, "Constrained-NR" = 15)) +
+  scale_x_continuous(limits = c(0, NA)) +
+  labs(x = "Expected Count at Baseline",
+       y = NULL, color = "Method", shape = "Method") +
+  theme_minimal(base_size = 12)
+
+intercept_df <- intercept_df_combined %>%
+  filter(method != "Constrained-RS") %>%
+  mutate(method = factor(method, levels = c("Gaussian", "Constrained-NR")))
 
 p_forest_intercept <- ggplot(intercept_df, aes(x = intercept_resp, y = region, color = method, shape = method, group = method)) +
   geom_point(position = pd, size = 2) +
   geom_errorbar(aes(xmin = lwr_resp, xmax = upr_resp),
                 position = pd, width = 0.2) +
   scale_color_manual(values = c("Gaussian" = brewer.pal(3, "Set1")[2],
-                                "Constrained" = brewer.pal(3, "Set1")[3]),
-                     breaks = c("Gaussian", "Constrained")) +
-  scale_shape_manual(values = c("Gaussian" = 16, "Constrained" = 17),
-                     breaks = c("Gaussian", "Constrained")) +
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3]),
+                     breaks = c("Gaussian", "Constrained-NR")) +
+  scale_shape_manual(values = c("Gaussian" = 16, "Constrained-NR" = 17),
+                     breaks = c("Gaussian", "Constrained-NR")) +
   scale_x_continuous(limits = c(0, NA)) +
   labs(x = "Expected Count at Baseline",
        y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
-
 #---------------------------------------------------------------------
 # Forest plots for differences vs Gaussian (ratio-of-rate-ratios)
 #---------------------------------------------------------------------
 # Slope differences (interaction terms) on response scale
-slope_diff_df <- glmm_results %>%
+slope_diff_df_combined <- glmm_results %>%
   select(region,
          Constrained_slope_diff_est = slope_diff_constrained,
          Constrained_slope_diff_lwr = slope_diff_constrained_lwr,
@@ -586,25 +619,38 @@ slope_diff_df <- glmm_results %>%
                names_to = c("method", ".value"),
                names_pattern = "(Constrained|ConstrainedNR)_slope_diff_(.*)") %>%
   filter(region %in% rois) %>%
-  # keep only the NR (no-resample) differences and rename
-  filter(method != "Constrained") %>%
-  mutate(method = recode(method, ConstrainedNR = "Constrained")) %>%
-  mutate(method = factor(method, levels = c("Constrained"))) %>%
+  mutate(method = recode(method, Constrained = "Constrained-RS", ConstrainedNR = "Constrained-NR")) %>%
+  mutate(method = factor(method, levels = c("Constrained-NR", "Constrained-RS"))) %>%
   mutate(ratio_rr = exp(est), lwr_rr = exp(lwr), upr_rr = exp(upr)) %>%
   mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
+
+p_forest_slope_diff_combined <- ggplot(slope_diff_df_combined, aes(x = ratio_rr, y = region, color = method, shape = method, group = method)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(xmin = lwr_rr, xmax = upr_rr), position = pd, width = 0.2) +
+  scale_color_manual(values = c("Constrained-RS" = brewer.pal(3, "Set1")[1],
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Constrained-RS" = 17, "Constrained-NR" = 15)) +
+  scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
+  labs(x = "Ratio of Slope Rate Ratios vs Gaussian (per 1 mm FWHM)", y = NULL, color = "Method", shape = "Method") +
+  theme_minimal(base_size = 12)
+
+slope_diff_df <- slope_diff_df_combined %>%
+  filter(method != "Constrained-RS") %>%
+  mutate(method = factor(method, levels = c("Constrained-NR")))
 
 p_forest_slope_diff <- ggplot(slope_diff_df, aes(x = ratio_rr, y = region, color = method, shape = method, group = method)) +
   geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
   geom_point(position = pd, size = 2) +
   geom_errorbar(aes(xmin = lwr_rr, xmax = upr_rr), position = pd, width = 0.2) +
-  scale_color_manual(values = c("Constrained" = brewer.pal(3, "Set1")[3])) +
-  scale_shape_manual(values = c("Constrained" = 17)) +
+  scale_color_manual(values = c("Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Constrained-NR" = 17)) +
   scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
   labs(x = "Ratio of Slope Rate Ratios vs Gaussian (per 1 mm FWHM)", y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
 
 # Intercept differences on response scale
-intercept_diff_df <- glmm_results %>%
+intercept_diff_df_combined <- glmm_results %>%
   select(region,
          Constrained_intercept_diff_est = intercept_diff_constrained,
          Constrained_intercept_diff_lwr = intercept_diff_constrained_lwr,
@@ -616,19 +662,32 @@ intercept_diff_df <- glmm_results %>%
                names_to = c("method", ".value"),
                names_pattern = "(Constrained|ConstrainedNR)_intercept_diff_(.*)") %>%
   filter(region %in% rois) %>%
-  # keep only the NR (no-resample) differences and rename
-  filter(method != "Constrained") %>%
-  mutate(method = recode(method, ConstrainedNR = "Constrained")) %>%
-  mutate(method = factor(method, levels = c("Constrained"))) %>%
+  mutate(method = recode(method, Constrained = "Constrained-RS", ConstrainedNR = "Constrained-NR")) %>%
+  mutate(method = factor(method, levels = c("Constrained-NR", "Constrained-RS"))) %>%
   mutate(ratio_resp = exp(est), lwr_resp = exp(lwr), upr_resp = exp(upr)) %>%
   mutate(region = factor(as.character(region), levels = c("WM", "GM", "RH Precentral", "RH Postcentral")))
+
+p_forest_intercept_diff_combined <- ggplot(intercept_diff_df_combined, aes(x = ratio_resp, y = region, color = method, shape = method, group = method)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(xmin = lwr_resp, xmax = upr_resp), position = pd, width = 0.2) +
+  scale_color_manual(values = c("Constrained-RS" = brewer.pal(3, "Set1")[1],
+                                "Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Constrained-RS" = 17, "Constrained-NR" = 15)) +
+  scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
+  labs(x = "Ratio of Baseline Expected Counts vs Gaussian", y = NULL, color = "Method", shape = "Method") +
+  theme_minimal(base_size = 12)
+
+intercept_diff_df <- intercept_diff_df_combined %>%
+  filter(method != "Constrained-RS") %>%
+  mutate(method = factor(method, levels = c("Constrained-NR")))
 
 p_forest_intercept_diff <- ggplot(intercept_diff_df, aes(x = ratio_resp, y = region, color = method, shape = method, group = method)) +
   geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
   geom_point(position = pd, size = 2) +
   geom_errorbar(aes(xmin = lwr_resp, xmax = upr_resp), position = pd, width = 0.2) +
-  scale_color_manual(values = c("Constrained" = brewer.pal(3, "Set1")[3])) +
-  scale_shape_manual(values = c("Constrained" = 17)) +
+  scale_color_manual(values = c("Constrained-NR" = brewer.pal(3, "Set1")[3])) +
+  scale_shape_manual(values = c("Constrained-NR" = 17)) +
   scale_x_continuous(breaks = function(x) { rng <- range(x, na.rm = TRUE); base <- pretty(rng); sort(unique(c(base, 1))) }) +
   labs(x = "Ratio of Baseline Expected Counts vs Gaussian", y = NULL, color = "Method", shape = "Method") +
   theme_minimal(base_size = 12)
@@ -636,19 +695,54 @@ p_forest_intercept_diff <- ggplot(intercept_diff_df, aes(x = ratio_resp, y = reg
 
 #---------------------------------------------------------------------
 # Save all plots
-#---------------------------------------------------------------------
-ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_forest_plot_no_resample.pdf"),
+# Combined outputs
+if (nrow(active_plot_df) > 0) {
+  ggsave(filename = file.path(combined_dir, "sensory_active_voxels_by_method_fwhm_combined.pdf"),
+         plot = p_active_combined, width = 8, height = 6)
+}
+if (nrow(prop_plot_df) > 0) {
+  ggsave(filename = file.path(combined_dir, "sensory_percent_derived_gm_postcentral_by_method_fwhm_combined.pdf"),
+         plot = p_prop_combined, width = 8, height = 4)
+  }
+
+ggsave(filename = file.path(combined_dir, "sensory_smoothing_glmm_forest_plot_combined.pdf"),
+       plot = p_forest_combined, width = 6, height = 4)
+
+ggsave(filename = file.path(combined_dir, "sensory_intercept_glmm_forest_plot_combined.pdf"),
+       plot = p_forest_intercept_combined, width = 6, height = 4)
+
+ggsave(filename = file.path(combined_dir, "sensory_combined_forest_plots_combined.pdf"),
+       plot = p_forest_combined / p_forest_intercept_combined + plot_layout(ncol = 2, guides = "collect"),
+       width = 12, height = 4)
+
+ggsave(filename = file.path(combined_dir, "sensory_smoothing_glmm_slope_diff_forest_plot_combined.pdf"),
+       plot = p_forest_slope_diff_combined, width = 6, height = 4)
+
+ggsave(filename = file.path(combined_dir, "sensory_intercept_glmm_diff_forest_plot_combined.pdf"),
+       plot = p_forest_intercept_diff_combined, width = 6, height = 4)
+
+# No-resample-only outputs
+if (nrow(active_plot_nr_df) > 0) {
+  ggsave(filename = file.path(nr_only_dir, "sensory_active_voxels_by_method_fwhm_no_resample_only.pdf"),
+         plot = p_active_nr, width = 8, height = 6)
+  }
+if (nrow(prop_plot_nr_df) > 0) {
+  ggsave(filename = file.path(nr_only_dir, "sensory_percent_derived_gm_postcentral_by_method_fwhm_no_resample_only.pdf"),
+         plot = p_prop_nr, width = 8, height = 4)
+  }
+
+ggsave(filename = file.path(nr_only_dir, "sensory_smoothing_glmm_forest_plot_no_resample.pdf"),
        plot = p_forest, width = 6, height = 4)
 
-ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_forest_plot_no_resample.pdf"),
+ggsave(filename = file.path(nr_only_dir, "sensory_intercept_glmm_forest_plot_no_resample.pdf"),
        plot = p_forest_intercept, width = 6, height = 4)
 
-ggsave(filename = file.path(out_dir, "sensory_combined_forest_plots_no_resample.pdf"),
+ggsave(filename = file.path(nr_only_dir, "sensory_combined_forest_plots_no_resample.pdf"),
        plot = p_forest / p_forest_intercept + plot_layout(ncol = 2, guides = "collect"),
        width = 12, height = 4)
 
-ggsave(filename = file.path(out_dir, "sensory_smoothing_glmm_slope_diff_forest_plot_no_resample.pdf"),
+ggsave(filename = file.path(nr_only_dir, "sensory_smoothing_glmm_slope_diff_forest_plot_no_resample.pdf"),
        plot = p_forest_slope_diff, width = 6, height = 4)
 
-ggsave(filename = file.path(out_dir, "sensory_intercept_glmm_diff_forest_plot_no_resample.pdf"),
+ggsave(filename = file.path(nr_only_dir, "sensory_intercept_glmm_diff_forest_plot_no_resample.pdf"),
        plot = p_forest_intercept_diff, width = 6, height = 4)
