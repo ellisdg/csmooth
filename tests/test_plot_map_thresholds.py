@@ -1,6 +1,6 @@
 import pytest
 
-import paper.sensory.archive.plot_stat_maps as psm
+import paper.plot_stat_maps as psm
 
 
 def test_plot_multiple_stat_maps_uses_per_map_thresholds(monkeypatch):
@@ -186,7 +186,7 @@ def test_stat_map_vmin_vmax_passthrough(monkeypatch):
     `plot_multiple_stat_maps` are forwarded unchanged to the underlying
     `plot_mri_with_contours` calls (i.e., shared colormap behaviour).
     """
-    import paper.sensory.archive.plot_stat_maps as psm
+    import paper.plot_stat_maps as psm
 
     captured = []
 

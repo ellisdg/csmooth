@@ -14,8 +14,8 @@ import matplotlib.pyplot as plt
 
 from nilearn.image import resample_to_img, smooth_img
 
-from paper.sensory.archive.plot_stat_maps import plot_mri_with_contours
-from paper.sensory.archive.plot_stat_maps import plot_multiple_stat_maps
+from paper.plot_stat_maps import plot_mri_with_contours
+from paper.plot_stat_maps import plot_multiple_stat_maps
 
 from paper.simulations.grid_resolution_effect import (
     compute_binary_metrics,

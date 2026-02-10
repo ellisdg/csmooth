@@ -7,7 +7,7 @@ import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
 
-from paper.sensory.archive.plot_stat_maps import plot_mri_with_contours
+from paper.plot_stat_maps import plot_mri_with_contours
 
 
 # -----------------------------------------------------------------------------

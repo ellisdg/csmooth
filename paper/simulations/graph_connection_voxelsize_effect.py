@@ -47,7 +47,7 @@ from csmooth.heat import heat_kernel_smoothing
 from csmooth.affine import adjust_affine_spacing, resample_data_to_affine
 from csmooth.fwhm import estimate_fwhm
 from scipy.spatial import cKDTree
-from paper.sensory.archive.plot_stat_maps import plot_multiple_stat_maps
+from paper.plot_stat_maps import plot_multiple_stat_maps
 
 
 @dataclass(frozen=True)

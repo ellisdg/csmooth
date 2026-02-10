@@ -575,6 +575,7 @@ def plot_multiple_stat_maps(
     crop_map_fname=None,
     crop_stat_map_threshold=None,
     crop_padding=0,
+    crop_enabled=True,
 ):
     """
     Plot multiple statistical maps on MRI contours and combine into a large figure.
@@ -672,10 +673,12 @@ def plot_multiple_stat_maps(
                 crop_bounds=crop_bounds,
                 crop_stat_map_threshold=crop_stat_map_threshold,
                 crop_padding=crop_padding,
+                crop_enabled=crop_enabled,
             )
             axs[i, j].set_axis_off()
             axs[i, j].set_aspect("equal")
             axs[i, j].set_facecolor("black")
+
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout(pad=0)
     if show:
@@ -683,68 +686,3 @@ def plot_multiple_stat_maps(
     return fig
 
 
-if __name__ == "__main__":
-    base_dir = "/media/conda2/public/sensory"
-    for subject in ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"]:
-        fmriprep_dir = op.join(base_dir, "derivatives", "fmriprep")
-        subjects_dir = op.join(fmriprep_dir, "sourcedata", "freesurfer")
-        mri_fname = op.join(fmriprep_dir, f"sub-{subject}", "anat", f"sub-{subject}_desc-preproc_T1w.nii.gz")
-        fwhm = 0
-        stat_fnames = list()
-        for fwhm in (0, 3, 6, 9, 12):
-            stat_map_fname = f"{base_dir}/derivatives/fsl_gaussian/sub-{subject}/func/sub-{subject}_task-lefthand_run-1_space-T1w_desc-preproc_bold_fwhm-{fwhm}.feat/stats/zstat1.nii.gz"
-            stat_fnames.append(stat_map_fname)
-        surfaces = [
-            (op.join(fmriprep_dir, f"sub-{subject}", "anat",
-                     f"sub-{subject}_hemi-L_pial.surf.gii"), "g"),
-            (op.join(fmriprep_dir, f"sub-{subject}", "anat",
-                     f"sub-{subject}_hemi-R_pial.surf.gii"), "g"),
-            (op.join(fmriprep_dir, f"sub-{subject}", "anat",
-                     f"sub-{subject}_hemi-L_white.surf.gii"), "b"),
-            (op.join(fmriprep_dir, f"sub-{subject}", "anat",
-                     f"sub-{subject}_hemi-R_white.surf.gii"), "b"),
-
-        ]
-
-        kwargs = dict(
-            mri_fname=mri_fname,
-            surfaces=surfaces,
-            slices=[203, 204, 205, 206, 207],
-            orientation="axial",
-            width=512,
-            slices_as_subplots=True,
-            stat_map_cmap="hot",
-            stat_map_alpha=0.9,
-            stat_map_threshold=3.1,
-            mri_alpha=0.9,
-            surface_alpha=0.9,
-            stat_map_interpolation="nearest",
-            surface_thickness=0.75,
-            show=True,
-            stat_map_vmin=3.1,
-            stat_map_vmax=12.0,
-            colorbar=True
-        )
-
-        slices_str = "_".join(map(str, kwargs["slices"]))
-
-        fig = plot_multiple_stat_maps(
-            stat_map_fnames=stat_fnames,
-            **kwargs
-        )
-        fig.savefig(f"sub-{subject}_sensory_stat_maps_gaussian_{slices_str}.png",
-                    dpi=300,
-                    bbox_inches="tight")
-
-        stat_fnames = list()
-        for fwhm in (3, 6, 9, 12):
-            stat_map_fname = f"{base_dir}/derivatives/fsl_constrained/sub-{subject}/func/sub-{subject}_task-lefthand_run-1_space-T1w_desc-csmooth_fwhm-{fwhm}_bold.feat/stats/zstat1.nii.gz"
-            stat_fnames.append(stat_map_fname)
-
-        fig = plot_multiple_stat_maps(
-            stat_map_fnames=stat_fnames,
-            **kwargs
-        )
-        fig.savefig(f"sub-{subject}_sensory_stat_maps_constrained_{slices_str}.png",
-                    dpi=300,
-                    bbox_inches="tight")
