@@ -207,12 +207,19 @@ def main(argv: list[str] | None = None):
 
     template_text = read_template(template_path)
 
-
     clean_json = find_clean_json(fmri_path, config, info["method"])
     total_volumes = read_scrubbed_volumes(clean_json)
-    brain_mask_filename = read_brain_mask_filename_from_json(clean_json)
+    fmriprep_brain_mask_filename = read_brain_mask_filename_from_json(clean_json)
+    # we're actually going to ignore the fmriprep brainmask
+
+    if info["method"] == "csmooth":
+        brain_mask_filename = "/data2/david.ellis/public/HCPA/code/fpr/tpl-MNI152NLin2009cAsym_res-02_desc-brain_mask.nii.gz"
+    elif info["method"] == "gaussian":
+        brain_mask_filename = "/data2/david.ellis/public/HCPA/code/fpr/tpl-MNI152NLin2009cAsym_res-02_desc-brain_mask_resampled.nii.gz"
+    else:
+        raise ValueError(f"Unknown method {info['method']} for brain mask selection")
     print(f"Running FEAT for {fmri_path}")
-    print(f"Brain mask from JSON: {brain_mask_filename}")
+    print(f"Brain mask: {brain_mask_filename}")
     print(f"Total volumes after scrubbing: {total_volumes}")
     print(f"Clean JSON: {clean_json}")
     print(f"Output FEAT directory: {output_root}")
