@@ -11,6 +11,7 @@ import argparse
 import glob
 import os
 import re
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -22,6 +23,7 @@ import yaml
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from nilearn import plotting
+import seaborn as sns
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -200,12 +202,12 @@ def write_fpr_volume(counts: np.ndarray, n_runs: int, mask_img: nib.Nifti1Image,
         data = np.zeros_like(counts, dtype=np.float32)
     else:
         data = counts.astype(np.float32) / float(n_runs) * 100.0
-    img = nib.Nifti1Image(data, mask_img.affine )
+    img = nib.Nifti1Image(data, mask_img.affine, mask_img.header)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     nib.save(img, str(output_path))
 
 
-def save_stat_map_png(data: np.ndarray, mask_img: nib.Nifti1Image, output_path: Path, title: str) -> None:
+def save_stat_map_png(data: np.ndarray, mask_img: nib.Nifti1Image, output_path: Path, title: str, vmax: float) -> None:
     """Save a quick-view stat map PNG using nilearn."""
     display = plotting.plot_stat_map(
         nib.Nifti1Image(data, mask_img.affine),
@@ -213,7 +215,8 @@ def save_stat_map_png(data: np.ndarray, mask_img: nib.Nifti1Image, output_path: 
         display_mode="ortho",
         threshold=0,
         colorbar=True,
-        vmax=100,
+        vmax=vmax,
+        cmap="hot",
         title=title,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,16 +225,34 @@ def save_stat_map_png(data: np.ndarray, mask_img: nib.Nifti1Image, output_path: 
 
 
 def save_boxplots(entries: list[tuple[str, np.ndarray]], output_path: Path, title: str) -> None:
-    """Write boxplots for FPR percentage values per map."""
+    """Write boxplots for FPR percentage values per map using seaborn."""
     if not entries:
         return
-    labels = [lbl for lbl, _ in entries]
-    data = [vals for _, vals in entries]
-    fig, ax = plt.subplots(figsize=(max(8, len(labels) * 1.2), 6))
-    ax.boxplot(data, labels=labels, showfliers=False)
+    sns.set_theme(style="whitegrid")
+    palette = {"gaussian": "C0", "csmooth": "C2"}
+    records = []
+    for method, label, vals in entries:
+        for v in vals:
+            records.append({"method": method, "label": label, "value": v})
+    df = pd.DataFrame.from_records(records)
+    order = [lbl for _, lbl, _ in entries]
+    order = list(dict.fromkeys(order))
+    fig, ax = plt.subplots(figsize=(max(8, len(order) * 0.8), 6))
+    sns.boxplot(
+        data=df,
+        x="label",
+        y="value",
+        hue="method",
+        order=order,
+        palette=palette,
+        showfliers=False,
+        ax=ax,
+    )
     ax.set_ylabel("FPR (%)")
+    ax.set_xlabel("")
     ax.set_title(title)
     plt.xticks(rotation=45, ha="right")
+    ax.legend(title="Method")
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path)
@@ -410,24 +431,62 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.skip_fpr_maps:
         maps_dir = Path(output_root) / "feat" / "fpr_maps"
+        map_entries: list[dict] = []
+        global_max = 0.0
+
+        def update_max(val: float) -> None:
+            nonlocal global_max
+            if np.isfinite(val):
+                global_max = max(global_max, float(val))
+
         for method, runs in filtered_method_runs.items():
             if not runs:
                 continue
             print(f"\nBuilding voxelwise FPR volumes for {method} ({len(runs)} runs)")
             mask_path = method_info[method]["mask_path"]
+            mask_img_full, mask_bool_full, _ = load_mask_with_img(mask_path)
+
+            def load_or_compute_pct(cluster_path: Path, voxel_path: Path, sub_runs: list[FeatRun]):
+                # Try loading existing percentage maps to avoid recomputation.
+                if cluster_path.exists() and voxel_path.exists():
+                    c_img = nib.load(str(cluster_path))
+                    v_img = nib.load(str(voxel_path))
+                    return c_img.get_fdata(), v_img.get_fdata(), c_img
+                cluster_counts, cluster_n, voxel_counts, voxel_n, _, mask_img = accumulate_fpr_maps(
+                    sub_runs, mask_path, voxel_z_thresh=args.voxel_z
+                )
+                write_fpr_volume(cluster_counts, cluster_n, mask_img, cluster_path)
+                write_fpr_volume(voxel_counts, voxel_n, mask_img, voxel_path)
+                cluster_pct = (cluster_counts.astype(np.float32) / float(cluster_n) * 100.0) if cluster_n else np.zeros_like(cluster_counts, dtype=np.float32)
+                voxel_pct = (voxel_counts.astype(np.float32) / float(voxel_n) * 100.0) if voxel_n else np.zeros_like(voxel_counts, dtype=np.float32)
+                return cluster_pct, voxel_pct, mask_img
 
             # Overall (all FWHM) map per method
-            cluster_counts, cluster_n, voxel_counts, voxel_n, mask_bool, mask_img = accumulate_fpr_maps(
-                runs, mask_path, voxel_z_thresh=args.voxel_z
-            )
-            write_fpr_volume(cluster_counts, cluster_n, mask_img, maps_dir / f"{method}_cluster_fpr.nii.gz")
-            write_fpr_volume(voxel_counts, voxel_n, mask_img, maps_dir / f"{method}_voxel_fpr.nii.gz")
-            cluster_pct = (cluster_counts.astype(np.float32) / float(cluster_n) * 100.0) if cluster_n else np.zeros_like(cluster_counts, dtype=np.float32)
-            voxel_pct = (voxel_counts.astype(np.float32) / float(voxel_n) * 100.0) if voxel_n else np.zeros_like(voxel_counts, dtype=np.float32)
-            save_stat_map_png(cluster_pct, mask_img, maps_dir / f"{method}_cluster_fpr.png", f"{method} cluster FPR (all)")
-            save_stat_map_png(voxel_pct, mask_img, maps_dir / f"{method}_voxel_fpr.png", f"{method} voxel FPR (all)")
-            boxplot_entries["cluster"].append((f"{method}-all", cluster_pct[mask_bool]))
-            boxplot_entries["voxel"].append((f"{method}-all", voxel_pct[mask_bool]))
+            c_path = maps_dir / f"{method}_cluster_fpr.nii.gz"
+            v_path = maps_dir / f"{method}_voxel_fpr.nii.gz"
+            cluster_pct, voxel_pct, mask_img = load_or_compute_pct(c_path, v_path, runs)
+            update_max(np.nanmax(cluster_pct))
+            update_max(np.nanmax(voxel_pct))
+            map_entries.append({
+                "label": f"{method} cluster (all)",
+                "data": cluster_pct,
+                "mask_img": mask_img,
+                "png": maps_dir / f"{method}_cluster_fpr.png",
+                "kind": "cluster",
+                "method": method,
+                "fwhm": "all",
+            })
+            map_entries.append({
+                "label": f"{method} voxel (all)",
+                "data": voxel_pct,
+                "mask_img": mask_img,
+                "png": maps_dir / f"{method}_voxel_fpr.png",
+                "kind": "voxel",
+                "method": method,
+                "fwhm": "all",
+            })
+            boxplot_entries["cluster"].append((method, f"{method}-all", cluster_pct[mask_bool_full]))
+            boxplot_entries["voxel"].append((method, f"{method}-all", voxel_pct[mask_bool_full]))
 
             # Per-FWHM maps
             runs_by_fwhm: dict[str, list[FeatRun]] = {}
@@ -435,18 +494,83 @@ def main(argv: list[str] | None = None) -> None:
                 runs_by_fwhm.setdefault(r.fwhm, []).append(r)
             for fwhm, f_runs in sorted(runs_by_fwhm.items(), key=lambda kv: float(kv[0])):
                 sub_dir = maps_dir / method / f"fwhm-{fwhm}"
-                cluster_counts, cluster_n, voxel_counts, voxel_n, mask_bool, mask_img = accumulate_fpr_maps(
-                    f_runs, mask_path, voxel_z_thresh=args.voxel_z
-                )
-                write_fpr_volume(cluster_counts, cluster_n, mask_img, sub_dir / "cluster_fpr.nii.gz")
-                write_fpr_volume(voxel_counts, voxel_n, mask_img, sub_dir / "voxel_fpr.nii.gz")
-                cluster_pct = (cluster_counts.astype(np.float32) / float(cluster_n) * 100.0) if cluster_n else np.zeros_like(cluster_counts, dtype=np.float32)
-                voxel_pct = (voxel_counts.astype(np.float32) / float(voxel_n) * 100.0) if voxel_n else np.zeros_like(voxel_counts, dtype=np.float32)
-                save_stat_map_png(cluster_pct, mask_img, sub_dir / "cluster_fpr.png", f"{method} cluster FPR fwhm-{fwhm}")
-                save_stat_map_png(voxel_pct, mask_img, sub_dir / "voxel_fpr.png", f"{method} voxel FPR fwhm-{fwhm}")
-                boxplot_entries["cluster"].append((f"{method}-fwhm{fwhm}", cluster_pct[mask_bool]))
-                boxplot_entries["voxel"].append((f"{method}-fwhm{fwhm}", voxel_pct[mask_bool]))
+                c_path = sub_dir / "cluster_fpr.nii.gz"
+                v_path = sub_dir / "voxel_fpr.nii.gz"
+                cluster_pct, voxel_pct, mask_img = load_or_compute_pct(c_path, v_path, f_runs)
+                update_max(np.nanmax(cluster_pct))
+                update_max(np.nanmax(voxel_pct))
+                map_entries.append({
+                    "label": f"{method} cluster fwhm-{fwhm}",
+                    "data": cluster_pct,
+                    "mask_img": mask_img,
+                    "png": sub_dir / "cluster_fpr.png",
+                    "kind": "cluster",
+                    "method": method,
+                    "fwhm": str(fwhm),
+                })
+                map_entries.append({
+                    "label": f"{method} voxel fwhm-{fwhm}",
+                    "data": voxel_pct,
+                    "mask_img": mask_img,
+                    "png": sub_dir / "voxel_fpr.png",
+                    "kind": "voxel",
+                    "method": method,
+                    "fwhm": str(fwhm),
+                })
+                boxplot_entries["cluster"].append((method, f"{method}-fwhm{fwhm}", cluster_pct[mask_bool_full]))
+                boxplot_entries["voxel"].append((method, f"{method}-fwhm{fwhm}", voxel_pct[mask_bool_full]))
             print("Saved voxelwise FPR volumes and plots to", maps_dir)
+
+        # Apply a common vmax rounded up to the next multiple of 5
+        raw_max = global_max if global_max > 0 else 0
+        vmax = 5 if raw_max <= 0 else (math.floor(raw_max / 5) + 1) * 5
+
+        for entry in map_entries:
+            save_stat_map_png(entry["data"], entry["mask_img"], entry["png"], entry["label"], vmax=vmax)
+
+        def combined_panel(kind: str, filename: str) -> None:
+            entries = [m for m in map_entries if m["kind"] == kind]
+            if not entries:
+                return
+            # Sort fwhm with 'all' first, then numeric order
+            def fwhm_key(fwhm_val: str) -> float:
+                if fwhm_val == "all":
+                    return -1.0
+                try:
+                    return float(fwhm_val)
+                except Exception:
+                    return math.inf
+
+            fwhm_levels = sorted({m["fwhm"] for m in entries}, key=fwhm_key)
+            col_methods = ["gaussian", "csmooth"]
+            rows = len(fwhm_levels)
+            cols = len(col_methods)
+            fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3), sharex=False, sharey=False)
+            fig.patch.set_facecolor("black")
+            if rows == 1 and cols == 1:
+                axes = np.array([[axes]])
+            elif rows == 1 or cols == 1:
+                axes = np.atleast_2d(axes)
+            axes = np.array(axes).reshape(rows, cols)
+
+            for r_idx, fwhm_val in enumerate(fwhm_levels):
+                for c_idx, method in enumerate(col_methods):
+                    ax = axes[r_idx, c_idx]
+                    ax.set_facecolor("black")
+                    match = next((m for m in entries if m["fwhm"] == fwhm_val and m["method"] == method), None)
+                    if match and match["png"].exists():
+                        img = plt.imread(match["png"])
+                        ax.imshow(img)
+                        title = f"{method} {kind} fwhm-{fwhm_val}" if fwhm_val != "all" else f"{method} {kind} (all)"
+                        ax.set_title(title, color="white", fontsize=9)
+                    ax.axis('off')
+            fig.tight_layout()
+            combined_path = maps_dir / filename
+            fig.savefig(combined_path, dpi=200, facecolor=fig.get_facecolor())
+            plt.close(fig)
+
+        combined_panel("cluster", "fpr_maps_combined_cluster.png")
+        combined_panel("voxel", "fpr_maps_combined_voxel.png")
 
         # Boxplots comparing FPR distributions across methods and smoothing levels
         save_boxplots(
