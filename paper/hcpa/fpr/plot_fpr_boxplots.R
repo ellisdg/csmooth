@@ -159,11 +159,11 @@ save_boxplot <- function(plot_obj, filename) {
   ggsave(filename, plot = plot_obj, width = max(7, 5 + 0.6 * nlevels(fpr$fwhm)), height = 4, dpi = 300)
 }
 
-p_cluster <- make_boxplot(fpr, "cluster_fp_pct", "FPR (%)", "Clusterwise thresholding", drop_y_title = TRUE)
-p_voxel   <- make_boxplot(fpr, "voxel_fp_pct",   "FPR (%)",   "Voxelwise thresholding", drop_y_title = FALSE)
+p_cluster <- make_boxplot(fpr, "cluster_fp_pct", "FPR (%)", "With cluster significance threshold", drop_y_title = TRUE)
+p_voxel   <- make_boxplot(fpr, "voxel_fp_pct",   "FPR (%)",   "Without cluster significance threshold", drop_y_title = FALSE)
 
-p_bar_cluster <- make_barplot(fpr_summary, sig_labels, "cluster_fp_pct", "FPR (%)", "Clusterwise thresholding", drop_y_title = TRUE)
-p_bar_voxel   <- make_barplot(fpr_summary, sig_labels, "voxel_fp_pct",   "FPR (%)", "Voxelwise thresholding", drop_y_title = FALSE)
+p_bar_cluster <- make_barplot(fpr_summary, sig_labels, "cluster_fp_pct", "FPR (%)", "With cluster significance threshold", drop_y_title = TRUE)
+p_bar_voxel   <- make_barplot(fpr_summary, sig_labels, "voxel_fp_pct",   "FPR (%)", "Without cluster significance threshold", drop_y_title = FALSE)
 
 save_boxplot(p_cluster, file.path(output_dir, "fpr_cluster_boxplots.pdf"))
 save_boxplot(p_voxel,   file.path(output_dir, "fpr_voxel_boxplots.pdf"))
