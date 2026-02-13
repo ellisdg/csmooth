@@ -47,17 +47,22 @@ data = read_parquet(data_file)
 # Ensure FWHM is numeric and Method/Subject are factors with the intended levels.
 data <- data %>%
   mutate(
-    FWHM = as.numeric(FWHM),
-    Method = as.character(Method),
-    Method = ifelse(FWHM == 0, "no_smoothing", Method),
-    # if Method is NA for non-zero FWHM (e.g. original data didn't include Method),
-    # assume gaussian smoothing for those rows
-    Method = ifelse(is.na(Method) & FWHM != 0, "gaussian", Method)
+    FWHM = suppressWarnings(as.numeric(FWHM)),
+    Method = trimws(tolower(as.character(Method))),
+    Method = dplyr::recode(Method,
+                           "nosmoothing" = "no_smoothing",
+                           "no_smoothing" = "no_smoothing",
+                           "no smoothing" = "no_smoothing",
+                           "gaussian" = "gaussian",
+                           "constrained" = "constrained",
+                           .default = Method),
+    Method = if_else(FWHM == 0 & is.na(Method), "no_smoothing", Method)
   ) %>%
+  filter(!is.na(Method), !is.na(FWHM), !is.na(Distance_mm), !is.na(FisherZ_Connectivity)) %>%
   distinct()
 
-# Make Method a factor with three levels: no_smoothing, gaussian, constrained
-data$Method <- factor(data$Method, levels = c("no_smoothing", "gaussian", "constrained"))
+# Make Method a factor using the observed levels (so existing data passes through)
+data$Method <- factor(data$Method, levels = unique(data$Method))
 # Subject as a factor
 data$Subject <- factor(data$Subject)
 
@@ -91,6 +96,9 @@ dist_seq <- seq(dist_range[1], dist_range[2], length.out = 50)
 
 # Build the valid Method x FWHM combinations from the data (this avoids invalid pairs)
 combos <- data %>% distinct(Method, FWHM)
+if (nrow(combos) == 0) {
+  stop("No valid Method x FWHM combinations available for prediction grid.")
+}
 # Cartesian product of distances with valid combos
 newdat <- merge(data.frame(Distance_mm = dist_seq), combos, by = NULL, stringsAsFactors = FALSE)
 

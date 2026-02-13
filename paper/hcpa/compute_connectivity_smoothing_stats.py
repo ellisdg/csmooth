@@ -118,7 +118,7 @@ def process_subject_connectivity_distance(subject_dir, distance_values):
     triu_indices = np.triu_indices_from(ns_matrix, k=1)
     ns_values = ns_matrix.astype(np.float32)[triu_indices]
 
-    # append no smoothing values twice, once for each method
+    # append no smoothing values
     subject_data = append_data(subject_data, subject_name, "NoSmoothing", 0, distance_values, ns_values)
     del ns_values, ns_matrix
 
@@ -185,10 +185,11 @@ def parse_args():
                         help="Number of subjects to process.")
     parser.add_argument("--graph_density", type=float, default=0.2,
                         help="Graph density for adjacency matrix computation.")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing outputs if set.")
     return parser.parse_args()
 
 
-def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_density=0.2):
+def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_density=0.2, force=False):
 
     print("Fetching atlas image and labels...")
     atlas_image, atlas_labels_df = fetch_atlas_image()
@@ -207,7 +208,9 @@ def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_d
     if n_subjects is not None:
         subject_dirs = subject_dirs[:n_subjects]
 
-    if not os.path.exists(output_data):
+    if not os.path.exists(output_data) or force:
+        if force and os.path.exists(output_data):
+            print(f"Force enabled: overwriting existing {output_data}")
         print(f"Processing {len(subject_dirs)} subjects for connectivity-distance data using {cpu_count()} CPU cores...")
         process_func = partial(process_subject_connectivity_distance, distance_values=distance_values)
         data = []
@@ -227,7 +230,9 @@ def main(connectivity_dir, output_metrics, output_data, n_subjects=None, graph_d
     else:
         print(f"Output data file {output_data} already exists. Skipping connectivity-distance data processing.")
 
-    if not os.path.exists(output_metrics):
+    if not os.path.exists(output_metrics) or force:
+        if force and os.path.exists(output_metrics):
+            print(f"Force enabled: overwriting existing {output_metrics}")
         print(f"Processing {len(subject_dirs)} subjects for graph metrics using {cpu_count()} CPU cores...")
         process_func = partial(process_subject_metrics, graph_density=graph_density, network_communities=network_communities)
         metrics = []
@@ -258,4 +263,5 @@ if __name__ == "__main__":
          output_metrics=args.output_metrics,
          output_data=args.output_data,
          n_subjects=args.n_subjects,
-         graph_density=args.graph_density)
+         graph_density=args.graph_density,
+         force=args.force)
