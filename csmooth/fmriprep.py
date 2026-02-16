@@ -194,11 +194,16 @@ def process_fmriprep_subject(fmriprep_subject_dir, output_subject_dir, parameter
     if not files["bold_files"]:
         logger.info(f"All output files already exist in {output_subject_dir}; skipping processing.")
         return
-    if parameters.get("no_resample", False):
-        logger.warning("Ignoring --voxel_size parameter and not resampling the image prior to smoothing.")
+    voxel_size = parameters.get("voxel_size")
+    no_resample = parameters.get("no_resample", False)
+
+    if voxel_size is None:
+        resample_resolution = None
+    elif no_resample:
+        logger.warning("Ignoring --voxel_size parameter because --no_resample was set; no resampling will be performed.")
         resample_resolution = None
     else:
-        resample_resolution = (parameters.get("voxel_size"), parameters.get("voxel_size"), parameters.get("voxel_size"))
+        resample_resolution = (voxel_size, voxel_size, voxel_size)
 
     smooth_images(in_files=files["bold_files"],
                   surface_files=files["surface_files"],
@@ -290,15 +295,14 @@ def add_parameter_args(parser):
                         help="Number of parallel processes to use for smoothing.")
     parser.add_argument("--overwrite", action='store_true',
                         help="If set, overwrite existing output files. Default is to not overwrite.")
-    parser.add_argument("--voxel_size", type=float, default=1.0,
+    parser.add_argument("--voxel_size", type=float, default=None,
                         help="Isotropic voxel size for resampling the image and mask prior to smoothing. "
+                             "Provide this flag to enable resampling; otherwise no resampling is performed. "
                              "Smaller voxel sizes allow for a more continuous graph but increase computational "
-                             "requirements and runtime. Default is 1.0 mm.")
+                             "requirements and runtime.")
     parser.add_argument("--no_resample", action='store_true',
-                        help="If set, do not resample the image prior to smoothing. "
-                             "The graph will be formed using the resolution of the BOLD images. "
-                             "This overrides the --voxel_size parameter. "
-                             "Default is to resample the image to the specified voxel size.")
+                        help="If set, do not resample the image prior to smoothing even if --voxel_size is provided. "
+                             "The graph will be formed using the resolution of the BOLD images.")
     parser.add_argument("--low_mem", action='store_true',
                         help="If set, use low memory mode. This will reduce memory usage but may increase runtime. "
                              "Memory usage is reduced by smoothing each timepoint separately instead of all at once. "
