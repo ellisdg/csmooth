@@ -88,8 +88,8 @@ Optional modifiers:
 - `--bold_files <paths...>` Custom input BOLD(s) in T1w space (requires `--subject`)
 - `--output_to_mni` Resample outputs to MNI152NLin2009cAsym using fMRIPrep transform
 - `--mask_dilation <int>` Voxels to dilate mask (default 3)
-- `--voxel_size <float>` Isotropic resample size prior to smoothing (default 1.0 mm)
-- `--no_resample` Skip resampling entirely
+- `--voxel_size <float>` Isotropic resample size prior to smoothing (default: no resampling). Provide this flag to enable resampling (for example: `--voxel_size 1.0` for 1 mm isotropic voxels).
+- `--no_resample` Skip resampling entirely (if set, any provided `--voxel_size` will be ignored)
 - `--multiproc <int>` Parallel workers (default 4)
 - `--overwrite` Replace existing output files
 - `--low_mem` Lower memory usage (slower)
@@ -144,7 +144,7 @@ from csmooth.fmriprep import process_fmriprep_subject
 params = {
     'fwhm': 6.0,
     'mask_dilation': 3,
-    'voxel_size': 1.0,
+    'voxel_size': None,  # Default is no resampling; set to a float (e.g. 1.0) to enable resampling
     'multiproc': 4,
     'overwrite': False,
     'low_memory': False
@@ -165,15 +165,6 @@ Only needed if you are modifying the source:
 ```bash
 docker build -t ellisdg/csmooth .
 ```
-
----
-## Tips & Troubleshooting
-
-- Ensure fMRIPrep directory contains expected `sub-*` folders and anatomical + functional outputs.
-- If you see missing file errors, verify you ran fMRIPrep with surface reconstruction (`--fs-license-file`).
-- Reduce memory: use `--low_mem`, increase parallelism carefully (`--multiproc`) depending on CPU cores.
-- For higher spatial fidelity, keep `--voxel_size 1.0`; larger values speed up processing but reduce graph detail.
-- MNI output omits T1w-space images (only MNI saved).
 
 ---
 ## Citation
