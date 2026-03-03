@@ -24,8 +24,8 @@ library(RColorBrewer)
 # cat("Graphy Connectivity Metrics Filename:", metrics_file, "\n")
 # cat("Output Directory:", output_dir, "\n")
 
-metrics_file <- "~/Box Sync/Aizenberg_Documents/Papers/csmooth/results/conn_smoothing_graph_metrics.csv"
-output_dir <- "~/Box Sync/Aizenberg_Documents/Papers/csmooth/figures/hcpa_conn/"
+metrics_file <- "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/hcpa_conn/no_resample/conn_smoothing_graph_metrics.csv"
+output_dir <- "/Users/david.ellis/Library/CloudStorage/Box-Box/csmooth_frontiers/figures/ch2/hcpa_conn/no_resample"
 
 # read in the csv file
 metrics_data = read_csv(metrics_file)
@@ -33,14 +33,14 @@ metrics_data = read_csv(metrics_file)
 # --- Boxplots for each metric across smoothing conditions ---
 
 # In the Method column there is gaussian and constrained
-# However, when FWHM=0, there is no smoothing, so we will treat that as a separate condition
+# However, when FWHM=0, there is No smoothing, so we will treat that as a separate condition
 # So, set FWHM=0 rows to Method="No Smoothing"
 # and ensure the Method factor levels are ordered as: No Smoothing, Gaussian, Constrained
 # Also ensure FWHM is treated as a factor for plotting purposes
 # Also, also remove duplicate rows, as some No Smoothing rows are duplicated
 metrics_data <- metrics_data %>%
   mutate(
-    Method = if_else(FWHM == 0, "no smoothing", Method)
+    Method = if_else(FWHM == 0, "No smoothing", Method)
   )
 
 # If there are duplicate rows (same Subject, Method, FWHM), keep only one
@@ -48,9 +48,9 @@ metrics_data <- metrics_data %>%
   distinct(Subject, Method, FWHM, .keep_all = TRUE)
 
 
-# Ensure FWHM=0 (no smoothing) is included
+# Ensure FWHM=0 (No smoothing) is included
 metrics_data$FWHM <- as.factor(metrics_data$FWHM)
-metrics_data$Method <- factor(metrics_data$Method, levels = c("no smoothing", "gaussian", "constrained"))
+metrics_data$Method <- factor(metrics_data$Method, levels = c("No smoothing", "Gaussian", "Constrained"))
 
 metrics_levels <- c("0", "3", "6", "9", "12")
 metrics_data$FWHM <- factor(metrics_data$FWHM, levels = metrics_levels)
@@ -80,11 +80,11 @@ boxplot_figure <- ggplot(plot_data, aes(x = FWHM, y = Value, fill = Method)) +
     y = "Metric Value",
     fill = "Method:"
   ) +
-  # force "no smoothing" = gray, + two colors from Set1
+  # force "No smoothing" = gray, + two colors from Set1
   scale_fill_manual(values = c(
-    "no smoothing" = "gray80",
-    "gaussian"     = brewer.pal(3, "Set1")[2],
-    "constrained"  = brewer.pal(3, "Set1")[3]
+    "No smoothing" = "gray80",
+    "Gaussian"     = brewer.pal(3, "Set1")[2],
+    "Constrained"  = brewer.pal(3, "Set1")[3]
   )) +
   theme(
     strip.text = element_text(size = 10, face = "bold"),
@@ -108,8 +108,8 @@ ttest_results <- tibble(
 for (metric in metrics) {
   for (fwhm in metrics_levels) {
     # Compare methods at each FWHM
-    vals_gaussian <- metrics_data %>% filter(FWHM == fwhm, Method == "gaussian") %>% pull(metric)
-    vals_constrained <- metrics_data %>% filter(FWHM == fwhm, Method == "constrained") %>% pull(metric)
+    vals_gaussian <- metrics_data %>% filter(FWHM == fwhm, Method == "Gaussian") %>% pull(metric)
+    vals_constrained <- metrics_data %>% filter(FWHM == fwhm, Method == "Constrained") %>% pull(metric)
     if (length(vals_gaussian) > 1 && length(vals_constrained) > 1) {
       ttest <- t.test(vals_gaussian, vals_constrained)
       ttest_results <- add_row(ttest_results,
@@ -120,11 +120,11 @@ for (metric in metrics) {
         p_value = ttest$p.value
       )
     }
-    # Compare each method at FWHM vs no smoothing (FWHM=0)
+    # Compare each method at FWHM vs No smoothing (FWHM=0)
     if (fwhm != "0") {
-      for (method in c("gaussian", "constrained")) {
+      for (method in c("Gaussian", "Constrained")) {
         vals_fwhm <- metrics_data %>% filter(FWHM == fwhm, Method == method) %>% pull(metric)
-        vals_nosmooth <- metrics_data %>% filter(FWHM == "0", Method == "no smoothing") %>% pull(metric)
+        vals_nosmooth <- metrics_data %>% filter(FWHM == "0", Method == "No smoothing") %>% pull(metric)
         if (length(vals_fwhm) > 1 && length(vals_nosmooth) > 1) {
           ttest <- t.test(vals_fwhm, vals_nosmooth)
           ttest_results <- add_row(ttest_results,
